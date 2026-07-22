@@ -148,6 +148,24 @@ describe("ensureWebhookRegistered", () => {
     expect(z.update).toHaveBeenCalledTimes(1);
   });
 
+  it("strips whitespace from appUrl (newline in env var corrupted the registered URL, #10)", async () => {
+    const z = fakeZernio([]);
+    await ensureWebhookRegistered(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      z.client as any,
+      { ...opts, appUrl: "https://app.zernflow.test\n", events: [...opts.events] },
+    );
+
+    expect(z.create).toHaveBeenCalledWith({
+      body: {
+        name: WEBHOOK_NAME,
+        url: EXPECTED_URL,
+        secret: "s3cr3t",
+        events: ["message.received", "comment.received"],
+      },
+    });
+  });
+
   it("matches an existing webhook by name even if url has a trailing slash in appUrl", async () => {
     const z = fakeZernio([
       { _id: "wh1", name: WEBHOOK_NAME, url: EXPECTED_URL, secret: "s3cr3t", events: ["message.received", "comment.received"] },

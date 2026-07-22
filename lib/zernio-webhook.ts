@@ -40,7 +40,10 @@ interface ZernioWebhook {
 }
 
 function webhookUrl(appUrl: string): string {
-  return `${appUrl.replace(/\/$/, "")}/api/webhooks/late`;
+  // trim() guards against whitespace smuggled in via the env var — a trailing
+  // newline in NEXT_PUBLIC_APP_URL once registered a webhook with a "\n" in
+  // the URL, silently failing every delivery (#10).
+  return `${appUrl.trim().replace(/\/$/, "")}/api/webhooks/late`;
 }
 
 /** Normalizes a URL to origin+pathname, dropping query string and trailing slash. */
