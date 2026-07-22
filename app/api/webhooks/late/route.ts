@@ -3,6 +3,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { executeFlow } from "@/lib/flow-engine/engine";
 import { matchTrigger } from "@/lib/flow-engine/trigger-matcher";
 import { resolveWebhookSecret, verifyWebhookSignature } from "@/lib/zernio-webhook";
+import { processComment } from "@/lib/comment-processor";
 
 // ── Zernio API webhook payload ───────────────────────────────────────────────
 
@@ -49,6 +50,24 @@ interface WebhookPayload {
   timestamp: string;
 }
 
+interface CommentWebhookPayload {
+  event: string;
+  comment: {
+    id: string;
+    postId: string;
+    platformPostId: string;
+    platform: string;
+    text: string;
+    author: { id: string; username?: string; name?: string; picture?: string };
+    createdAt: string;
+    isReply: boolean;
+    parentCommentId: string | null;
+  };
+  post: { id: string; platformPostId: string };
+  account: { id: string; platform: string; username: string };
+  timestamp: string;
+}
+
 // ── Webhook handler ─────────────────────────────────────────────────────────
 
 export async function POST(request: NextRequest) {
@@ -67,17 +86,23 @@ async function handleWebhook(request: NextRequest) {
   const body = await request.text();
   const signature = request.headers.get("x-late-signature");
 
-  let payload: WebhookPayload;
+  let parsed: { event?: string };
   try {
-    payload = JSON.parse(body);
+    parsed = JSON.parse(body);
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  // Only handle message.received events
-  if (payload.event !== "message.received") {
+  if (parsed.event === "comment.received") {
+    return handleCommentWebhook(parsed as CommentWebhookPayload, body, signature);
+  }
+
+  // Everything else besides message.received is acknowledged and ignored
+  if (parsed.event !== "message.received") {
     return NextResponse.json({ ok: true, skipped: true });
   }
+
+  const payload = parsed as WebhookPayload;
 
   const { message: msg, conversation: conv, account, metadata } = payload;
 
@@ -269,6 +294,54 @@ async function handleWebhook(request: NextRequest) {
   }
 
   return NextResponse.json({ ok: true });
+}
+
+// ── Comment webhook ─────────────────────────────────────────────────────────
+
+async function handleCommentWebhook(
+  payload: CommentWebhookPayload,
+  rawBody: string,
+  signature: string | null
+) {
+  const supabase = await createServiceClient();
+
+  const { data: channel } = await supabase
+    .from("channels")
+    .select("*")
+    .eq("late_account_id", payload.account.id)
+    .eq("is_active", true)
+    .single();
+
+  if (!channel) {
+    return NextResponse.json({ error: "Channel not found" }, { status: 404 });
+  }
+
+  // Prevent loops: our own comments (e.g. the configured public reply) also
+  // arrive as comment.received and must never re-trigger a flow.
+  if (
+    payload.comment.author?.username &&
+    payload.comment.author.username === channel.username
+  ) {
+    return NextResponse.json({ ok: true, skipped: true, reason: "own_comment" });
+  }
+
+  const secret = await resolveWebhookSecret(supabase, channel);
+  if (secret && !verifyWebhookSignature(secret, rawBody, signature)) {
+    return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
+  }
+
+  const result = await processComment({
+    supabase,
+    channel,
+    comment: {
+      id: payload.comment.id,
+      postId: payload.comment.postId,
+      text: payload.comment.text,
+      author: payload.comment.author,
+    },
+  });
+
+  return NextResponse.json({ ok: true, ...result });
 }
 
 // ── Global keywords ─────────────────────────────────────────────────────────
