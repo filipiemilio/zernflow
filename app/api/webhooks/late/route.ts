@@ -54,7 +54,8 @@ interface CommentWebhookPayload {
   event: string;
   comment: {
     id: string;
-    postId: string;
+    /** Zernio post ID; null when the comment is on a post not published through Zernio. */
+    postId: string | null;
     platformPostId: string;
     platform: string;
     text: string;
@@ -335,7 +336,10 @@ async function handleCommentWebhook(
     channel,
     comment: {
       id: payload.comment.id,
-      postId: payload.comment.postId,
+      // Native posts (not published through Zernio) have a null postId; fall
+      // back to the platform post id so flows still run. Zernio's private-reply
+      // endpoint only needs the comment id, so the placeholder is harmless.
+      postId: payload.comment.postId || payload.comment.platformPostId,
       text: payload.comment.text,
       author: payload.comment.author,
     },
