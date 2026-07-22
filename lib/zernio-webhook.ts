@@ -35,6 +35,7 @@ interface ZernioWebhook {
   _id?: string;
   name?: string;
   url?: string;
+  secret?: string;
   events?: string[];
 }
 
@@ -88,7 +89,12 @@ export async function ensureWebhookRegistered(
   }
 
   const eventsOk = opts.events.every((e) => mine.events?.includes(e));
-  if (mine.url !== url || !eventsOk) {
+  // Zernio's GET returns the stored secret, so drift is detectable. Without
+  // this check a secret rotated locally (e.g. the workspace column arriving
+  // after the webhook was first registered) never reaches Zernio and every
+  // delivery fails signature verification from then on.
+  const secretOk = (mine.secret || "") === opts.secret;
+  if (mine.url !== url || !eventsOk || !secretOk) {
     await zernio.webhooks.updateWebhookSettings({
       body: { _id: mine._id!, name: WEBHOOK_NAME, url, secret: opts.secret, events: opts.events },
     });

@@ -87,7 +87,7 @@ describe("ensureWebhookRegistered", () => {
 
   it("is idempotent — no-op when config already correct (AC2)", async () => {
     const z = fakeZernio([
-      { _id: "wh1", name: WEBHOOK_NAME, url: EXPECTED_URL, events: ["message.received", "comment.received"] },
+      { _id: "wh1", name: WEBHOOK_NAME, url: EXPECTED_URL, secret: "s3cr3t", events: ["message.received", "comment.received"] },
     ]);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const res = await ensureWebhookRegistered(z.client as any, { ...opts, events: [...opts.events] });
@@ -118,6 +118,25 @@ describe("ensureWebhookRegistered", () => {
     expect(z.create).not.toHaveBeenCalled();
   });
 
+  it("updates when the remote secret differs (drift after local rotation)", async () => {
+    const z = fakeZernio([
+      { _id: "wh1", name: WEBHOOK_NAME, url: EXPECTED_URL, secret: "old-secret", events: ["message.received", "comment.received"] },
+    ]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const res = await ensureWebhookRegistered(z.client as any, { ...opts, events: [...opts.events] });
+
+    expect(res.action).toBe("updated");
+    expect(z.update).toHaveBeenCalledWith({
+      body: {
+        _id: "wh1",
+        name: WEBHOOK_NAME,
+        url: EXPECTED_URL,
+        secret: "s3cr3t",
+        events: ["message.received", "comment.received"],
+      },
+    });
+  });
+
   it("updates when a required event is missing (AC3)", async () => {
     const z = fakeZernio([
       { _id: "wh1", name: WEBHOOK_NAME, url: EXPECTED_URL, events: ["message.received"] },
@@ -131,7 +150,7 @@ describe("ensureWebhookRegistered", () => {
 
   it("matches an existing webhook by name even if url has a trailing slash in appUrl", async () => {
     const z = fakeZernio([
-      { _id: "wh1", name: WEBHOOK_NAME, url: EXPECTED_URL, events: ["message.received", "comment.received"] },
+      { _id: "wh1", name: WEBHOOK_NAME, url: EXPECTED_URL, secret: "s3cr3t", events: ["message.received", "comment.received"] },
     ]);
     const res = await ensureWebhookRegistered(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
