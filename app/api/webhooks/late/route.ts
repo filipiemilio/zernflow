@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
+import { after } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { executeFlow } from "@/lib/flow-engine/engine";
 import { matchTrigger } from "@/lib/flow-engine/trigger-matcher";
 import { resolveWebhookSecret, verifyWebhookSignature } from "@/lib/zernio-webhook";
 import { processComment } from "@/lib/comment-processor";
+import type { Database } from "@/lib/types/database";
 
 // ── Zernio API webhook payload ───────────────────────────────────────────────
 
 interface WebhookPayload {
+  id?: string;
   event: string;
   message: {
     id: string;
@@ -51,6 +54,7 @@ interface WebhookPayload {
 }
 
 interface CommentWebhookPayload {
+  id?: string;
   event: string;
   comment: {
     id: string;
@@ -83,19 +87,43 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/**
+ * Claim an event id for processing. Returns false when another delivery of the
+ * same event already claimed it (Zernio retries with the same id), so retries
+ * and redeliveries never re-run a flow. Events without an id are processed
+ * unconditionally rather than dropped.
+ */
+async function claimWebhookEvent(
+  supabase: Awaited<ReturnType<typeof createServiceClient>>,
+  eventId: string | null | undefined
+): Promise<boolean> {
+  if (!eventId) return true;
+  const { error } = await supabase
+    .from("webhook_events")
+    .insert({ event_id: eventId });
+  if (!error) return true;
+  if (error.code === "23505") return false;
+  // Table missing / transient DB error: fail open so deliveries keep working.
+  console.error("webhook_events claim failed:", error);
+  return true;
+}
+
 async function handleWebhook(request: NextRequest) {
   const body = await request.text();
   const signature = request.headers.get("x-late-signature");
+  const headerEventId = request.headers.get("x-late-event-id");
 
-  let parsed: { event?: string };
+  let parsed: { event?: string; id?: string };
   try {
     parsed = JSON.parse(body);
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
+  const eventId = parsed.id || headerEventId;
+
   if (parsed.event === "comment.received") {
-    return handleCommentWebhook(parsed as CommentWebhookPayload, body, signature);
+    return handleCommentWebhook(parsed as CommentWebhookPayload, body, signature, eventId);
   }
 
   // Everything else besides message.received is acknowledged and ignored
@@ -105,7 +133,7 @@ async function handleWebhook(request: NextRequest) {
 
   const payload = parsed as WebhookPayload;
 
-  const { message: msg, conversation: conv, account, metadata } = payload;
+  const { message: msg, account } = payload;
 
   // Ignore outbound messages (sent by the bot itself) to prevent loops
   if (msg.direction === "outbound") {
@@ -150,6 +178,31 @@ async function handleWebhook(request: NextRequest) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
 
+  if (!(await claimWebhookEvent(supabase, eventId))) {
+    return NextResponse.json({ ok: true, skipped: true, reason: "duplicate_event" });
+  }
+
+  // Ack immediately and process after the response: Zernio aborts deliveries
+  // at 5s and retries, so contact upserts + flow execution (Zernio sends, AI
+  // nodes) must never run before the 200 goes out.
+  after(async () => {
+    try {
+      await processMessageEvent(supabase, payload, channel);
+    } catch (err) {
+      console.error("Webhook message processing error:", err);
+    }
+  });
+
+  return NextResponse.json({ ok: true, queued: true });
+}
+
+async function processMessageEvent(
+  supabase: Awaited<ReturnType<typeof createServiceClient>>,
+  payload: WebhookPayload,
+  channel: Database["public"]["Tables"]["channels"]["Row"],
+) {
+  const { message: msg, conversation: conv, account, metadata } = payload;
+
   // ── Upsert contact ───────────────────────────────────────────────────────
 
   const senderId = msg.sender.id;
@@ -182,10 +235,8 @@ async function handleWebhook(request: NextRequest) {
       .single();
 
     if (!newContact) {
-      return NextResponse.json(
-        { error: "Failed to create contact" },
-        { status: 500 }
-      );
+      console.error("Failed to create contact for webhook message");
+      return;
     }
 
     contactId = newContact.id;
@@ -228,10 +279,8 @@ async function handleWebhook(request: NextRequest) {
     .single();
 
   if (!conversation) {
-    return NextResponse.json(
-      { error: "Failed to upsert conversation" },
-      { status: 500 }
-    );
+    console.error("Failed to upsert conversation for webhook message");
+    return;
   }
 
   if (existingContactChannel) {
@@ -268,12 +317,13 @@ async function handleWebhook(request: NextRequest) {
     );
 
     if (!handled) {
-      const trigger = await matchTrigger(
-        supabase,
-        channel.id,
-        conversation.id,
-        incomingMessage
-      );
+      const trigger = await matchTrigger(supabase, {
+        channelId: channel.id,
+        workspaceId: channel.workspace_id,
+        conversationId: conversation.id,
+        message: incomingMessage,
+        isFirstMessage: !existingContactChannel,
+      });
       if (trigger) {
         try {
           await executeFlow(supabase, {
@@ -293,8 +343,6 @@ async function handleWebhook(request: NextRequest) {
       }
     }
   }
-
-  return NextResponse.json({ ok: true });
 }
 
 // ── Comment webhook ─────────────────────────────────────────────────────────
@@ -302,7 +350,8 @@ async function handleWebhook(request: NextRequest) {
 async function handleCommentWebhook(
   payload: CommentWebhookPayload,
   rawBody: string,
-  signature: string | null
+  signature: string | null,
+  eventId: string | null | undefined
 ) {
   const supabase = await createServiceClient();
 
@@ -331,21 +380,34 @@ async function handleCommentWebhook(
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
 
-  const result = await processComment({
-    supabase,
-    channel,
-    comment: {
-      id: payload.comment.id,
-      // Native posts (not published through Zernio) have a null postId; fall
-      // back to the platform post id so flows still run. Zernio's private-reply
-      // endpoint only needs the comment id, so the placeholder is harmless.
-      postId: payload.comment.postId || payload.comment.platformPostId,
-      text: payload.comment.text,
-      author: payload.comment.author,
-    },
+  if (!(await claimWebhookEvent(supabase, eventId))) {
+    return NextResponse.json({ ok: true, skipped: true, reason: "duplicate_event" });
+  }
+
+  // Ack before processing (same 5s delivery budget as messages); processComment
+  // additionally dedupes on (channel_id, platform_comment_id) so cross-event
+  // redeliveries of the same comment stay one-shot.
+  after(async () => {
+    try {
+      await processComment({
+        supabase,
+        channel,
+        comment: {
+          id: payload.comment.id,
+          // Native posts (not published through Zernio) have a null postId; fall
+          // back to the platform post id so flows still run. Zernio's private-reply
+          // endpoint only needs the comment id, so the placeholder is harmless.
+          postId: payload.comment.postId || payload.comment.platformPostId,
+          text: payload.comment.text,
+          author: payload.comment.author,
+        },
+      });
+    } catch (err) {
+      console.error("Webhook comment processing error:", err);
+    }
   });
 
-  return NextResponse.json({ ok: true, ...result });
+  return NextResponse.json({ ok: true, queued: true });
 }
 
 // ── Global keywords ─────────────────────────────────────────────────────────

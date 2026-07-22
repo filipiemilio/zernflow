@@ -12,17 +12,32 @@ type Trigger = Database["public"]["Tables"]["triggers"]["Row"];
 
 export async function matchTrigger(
   supabase: SupabaseClient<Database>,
-  channelId: string,
-  conversationId: string,
-  message: IncomingMessage
+  {
+    channelId,
+    workspaceId,
+    conversationId,
+    message,
+    isFirstMessage,
+  }: {
+    channelId: string;
+    workspaceId: string;
+    conversationId: string;
+    message: IncomingMessage;
+    /** Caller-known "first inbound message" signal; inbound messages are not
+     * mirrored locally, so the legacy count query below always sees 0. */
+    isFirstMessage?: boolean;
+  }
 ): Promise<Trigger | null> {
-  // Get all active triggers for this channel (or global triggers with null channel_id)
+  // Triggers with null channel_id are workspace-wide, NOT global: the flows
+  // join must be pinned to the channel's workspace or one tenant's triggers
+  // (and flows) would run on another tenant's channels.
   const { data: triggers } = await supabase
     .from("triggers")
-    .select("*, flows!inner(status)")
+    .select("*, flows!inner(status, workspace_id)")
     .or(`channel_id.eq.${channelId},channel_id.is.null`)
     .eq("is_active", true)
     .eq("flows.status", "published")
+    .eq("flows.workspace_id", workspaceId)
     .order("priority", { ascending: false });
 
   if (!triggers || triggers.length === 0) return null;
@@ -76,15 +91,17 @@ export async function matchTrigger(
   }
 
   // 4. Check welcome trigger (first inbound message for this contact on this channel)
-  // Count inbound messages in this specific conversation. If this is the only one
-  // (count === 1), it means the current message is the contact's very first message.
-  const { count } = await supabase
-    .from("messages")
-    .select("*", { count: "exact", head: true })
-    .eq("conversation_id", conversationId)
-    .eq("direction", "inbound");
+  let firstMessage = isFirstMessage;
+  if (firstMessage === undefined) {
+    const { count } = await supabase
+      .from("messages")
+      .select("*", { count: "exact", head: true })
+      .eq("conversation_id", conversationId)
+      .eq("direction", "inbound");
+    firstMessage = count === 1;
+  }
 
-  if (count === 1) {
+  if (firstMessage) {
     const welcomeTrigger = triggers.find((t) => t.type === "welcome");
     if (welcomeTrigger) return welcomeTrigger;
   }

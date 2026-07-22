@@ -53,7 +53,11 @@ export async function GET(request: NextRequest) {
       query: { accountId: channel.late_account_id },
     });
 
-    const zernioMessages = (res.data as any)?.data ?? [];
+    // The Zernio endpoint returns { success, messages: [...] } — NOT { data }.
+    const zernioMessages =
+      (res.data as { messages?: unknown[] })?.messages ??
+      (res.data as { data?: unknown[] })?.data ??
+      [];
 
     // Map Zernio messages to the shape the inbox UI expects
     const messages = zernioMessages.map((m: any) => ({

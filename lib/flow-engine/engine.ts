@@ -297,6 +297,63 @@ async function executeNode(
   }
 }
 
+async function sendFirstMessageAsPrivateReply(
+  supabase: SupabaseClient<Database>,
+  zernio: ReturnType<typeof createZernioClient>,
+  data: SendMessageNodeData,
+  context: FlowExecutionContext,
+  lateAccountId: string
+) {
+  const first = data.messages[0];
+  if (!first) return;
+
+  const text = interpolateVariables(
+    adaptMessage(first, context.platform ?? "instagram").text,
+    context.variables || {}
+  );
+
+  try {
+    await zernio.comments.sendPrivateReplyToComment({
+      path: {
+        postId: String(context.variables!.post_id),
+        commentId: String(context.variables!.comment_id),
+      },
+      body: { accountId: lateAccountId, message: text },
+    });
+
+    await supabase.from("messages").insert({
+      conversation_id: context.conversationId,
+      direction: "outbound",
+      text,
+      sent_by_flow_id: context.flowId,
+      status: "sent",
+    });
+
+    await supabase.from("analytics_events").insert({
+      workspace_id: context.workspaceId,
+      flow_id: context.flowId,
+      contact_id: context.contactId,
+      event_type: "message_sent",
+    });
+  } catch (error) {
+    console.error("Failed to send comment-context message as private reply:", error);
+    await supabase.from("messages").insert({
+      conversation_id: context.conversationId,
+      direction: "outbound",
+      text,
+      sent_by_flow_id: context.flowId,
+      status: "failed",
+    });
+    return;
+  }
+
+  if (data.messages.length > 1) {
+    console.warn(
+      "Comment flow Send Message node had multiple messages; only the first was sent (one private reply per comment)."
+    );
+  }
+}
+
 async function executeSendMessage(
   supabase: SupabaseClient<Database>,
   data: SendMessageNodeData,
@@ -339,6 +396,14 @@ async function executeSendMessage(
       .single();
 
     if (!conversation?.late_conversation_id) {
+      // Comment-triggered flows have no DM conversation yet. Instagram allows
+      // exactly one private reply per comment, so deliver the first message via
+      // the private-reply endpoint instead of silently dropping the whole node
+      // (users build comment flows with plain Send Message nodes, not Private Reply).
+      if (context.variables?.comment_id && context.variables?.post_id && lateAccountId) {
+        await sendFirstMessageAsPrivateReply(supabase, zernio, data, context, lateAccountId);
+        return;
+      }
       console.error("No late_conversation_id found for conversation:", context.conversationId);
       return;
     }

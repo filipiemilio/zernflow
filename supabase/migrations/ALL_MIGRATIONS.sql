@@ -522,3 +522,17 @@ create policy "flow_versions_insert" on flow_versions for insert
 -- Zernio exposes a single webhook per profile/API key, so the secret is stored
 -- at the workspace level (not per-channel). Used by /api/webhooks/late.
 ALTER TABLE workspaces ADD COLUMN IF NOT EXISTS webhook_secret TEXT;
+
+-- ============================================================
+-- Idempotency ledger for inbound Zernio webhook deliveries. Zernio retries a
+-- delivery with the same event id whenever our 200 doesn't arrive within its 5s
+-- timeout; /api/webhooks/late claims the id here before processing so retries
+-- and redeliveries never re-run a flow (which was double-sending DMs).
+CREATE TABLE IF NOT EXISTS webhook_events (
+  event_id TEXT PRIMARY KEY,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS webhook_events_received_at_idx ON webhook_events (received_at);
+
+ALTER TABLE webhook_events ENABLE ROW LEVEL SECURITY;

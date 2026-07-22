@@ -55,15 +55,18 @@ export function matchCommentTrigger(
 
 export async function getActiveCommentTriggers(
   supabase: SupabaseClient<Database>,
-  channelId: string,
+  { channelId, workspaceId }: { channelId: string; workspaceId: string },
 ): Promise<Trigger[]> {
+  // Null channel_id means workspace-wide, NOT global — pin to the channel's
+  // workspace so one tenant's triggers never run on another tenant's channels.
   const { data: triggers } = await supabase
     .from("triggers")
-    .select("*, flows!inner(status)")
+    .select("*, flows!inner(status, workspace_id)")
     .eq("type", "comment_keyword")
     .or(`channel_id.eq.${channelId},channel_id.is.null`)
     .eq("is_active", true)
     .eq("flows.status", "published")
+    .eq("flows.workspace_id", workspaceId)
     .order("priority", { ascending: false });
 
   return (triggers as Trigger[] | null) ?? [];
@@ -101,7 +104,10 @@ export async function processComment({
 
   if (alreadyLogged) return { matched: false, skipped: "already_processed" };
 
-  const triggers = await getActiveCommentTriggers(supabase, channel.id);
+  const triggers = await getActiveCommentTriggers(supabase, {
+    channelId: channel.id,
+    workspaceId: channel.workspace_id,
+  });
   const matchedTrigger = matchCommentTrigger(triggers, comment);
 
   if (!matchedTrigger) {

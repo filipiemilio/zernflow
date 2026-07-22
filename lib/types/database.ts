@@ -970,6 +970,20 @@ export interface Database {
           },
         ];
       };
+      webhook_events: {
+        Row: {
+          event_id: string;
+          received_at: string;
+        };
+        Insert: {
+          event_id: string;
+          received_at?: string;
+        };
+        Update: {
+          received_at?: string;
+        };
+        Relationships: [];
+      };
       sequences: {
         Row: {
           id: string;

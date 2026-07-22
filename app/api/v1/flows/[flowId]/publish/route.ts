@@ -63,16 +63,18 @@ export async function POST(
 
   // Sync trigger rows from the flow's trigger nodes into the `triggers` table.
   // The runtime matcher (lib/flow-engine/trigger-matcher.ts) reads triggers.config,
-  // but the builder only ever saved keywords into flows.nodes — so keyword / welcome /
-  // default / postback / quick_reply triggers configured in the UI never fired in
-  // production. Reconcile them here on publish. `comment_keyword` triggers are managed
-  // separately (Growth tab, channel-scoped) and are deliberately left untouched.
+  // but the builder only ever saved keywords into flows.nodes — so triggers configured
+  // in the UI never fired in production. Reconcile them here on publish. This includes
+  // `comment_keyword`: builder-created rows are workspace-wide (channel_id null), while
+  // Growth-tab rows are channel-scoped (channel_id set) and must survive republish —
+  // hence the null-channel guard on the delete below.
   const BUILDER_TRIGGER_TYPES = [
     "keyword",
     "postback",
     "quick_reply",
     "welcome",
     "default",
+    "comment_keyword",
   ] as const;
   type BuilderTriggerType = (typeof BUILDER_TRIGGER_TYPES)[number];
   const isBuilderTriggerType = (t: string): t is BuilderTriggerType =>
@@ -91,9 +93,13 @@ export async function POST(
       // template-seeded nodes store data.config.keywords ([string]). The matcher
       // accepts both shapes, so pass through whichever the node carries.
       const config: Record<string, any> = {};
-      if (type === "keyword") {
+      if (type === "keyword" || type === "comment_keyword") {
         config.keywords = data.keywords ?? nodeConfig.keywords ?? [];
         if (nodeConfig.matchType) config.matchType = nodeConfig.matchType;
+        const postIds = data.postIds ?? nodeConfig.postIds;
+        if (Array.isArray(postIds) && postIds.length > 0) config.postIds = postIds;
+        const replyText = data.replyText ?? nodeConfig.replyText;
+        if (typeof replyText === "string" && replyText.trim()) config.replyText = replyText;
       } else if (type === "postback" || type === "quick_reply") {
         const payload = data.payload ?? nodeConfig.payload;
         if (payload !== undefined) config.payload = payload;
@@ -110,13 +116,15 @@ export async function POST(
     })
     .filter((t): t is NonNullable<typeof t> => t !== null);
 
-  // Reconcile: clear the builder-managed trigger types for this flow, then insert the
+  // Reconcile: clear the builder-managed trigger rows for this flow, then insert the
   // fresh set derived from the current node graph (delete-and-reinsert keeps the table
-  // in sync with what was published and avoids duplicates on republish).
+  // in sync with what was published and avoids duplicates on republish). Only
+  // null-channel rows are builder-managed; channel-scoped rows belong to the Growth tab.
   await supabase
     .from("triggers")
     .delete()
     .eq("flow_id", flowId)
+    .is("channel_id", null)
     .in("type", [...BUILDER_TRIGGER_TYPES]);
 
   if (desiredTriggers.length > 0) {

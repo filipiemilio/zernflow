@@ -21,6 +21,13 @@ export async function GET(request: NextRequest) {
 
   const supabase = await createServiceClient();
 
+  // Prune the webhook idempotency ledger; ids only matter for Zernio's retry
+  // window (hours), so anything older than 48h is dead weight.
+  await supabase
+    .from("webhook_events")
+    .delete()
+    .lt("received_at", new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString());
+
   // Pick up pending jobs that are due
   const { data: jobs, error } = await supabase
     .from("scheduled_jobs")
