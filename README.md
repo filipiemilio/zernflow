@@ -171,3 +171,9 @@ Contributions are welcome! Please open an issue or submit a pull request.
 ## License
 
 MIT
+
+<p align="center">
+  <a href="https://zernio.com">
+    <img src="https://zernio.com/brand/powered-by-zernio.svg" alt="Powered by Zernio" width="180">
+  </a>
+</p>
