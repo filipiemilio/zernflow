@@ -129,7 +129,7 @@ export async function executeFlow(
 
 const MAX_TRAVERSAL_DEPTH = 50;
 
-async function resumeSession(
+export async function resumeSession(
   supabase: SupabaseClient<Database>,
   session: Database["public"]["Tables"]["flow_sessions"]["Row"],
   context: FlowExecutionContext
@@ -179,7 +179,7 @@ async function resumeSession(
   // Update session
   await supabase
     .from("flow_sessions")
-    .update({ waiting_for_input: false })
+    .update({ waiting_for_input: false, waiting_until: null })
     .eq("id", session.id);
 
   // Continue from current node
@@ -306,7 +306,7 @@ async function executeNode(
     case "privateReply":
       return executePrivateReply(supabase, node.data as PrivateReplyNodeData, context);
     case "aiResponse":
-      return executeAiResponse(supabase, node.data as AiResponseNodeData, context);
+      return executeAiResponse(supabase, node.data as AiResponseNodeData, context, sessionId);
     case "abSplit":
       return executeABSplit(node.data as ABSplitNodeData);
     case "smartDelay":
@@ -1009,11 +1009,27 @@ async function executeEnrollSequence(
   }
 }
 
+function resolveVariablePath(
+  variables: Record<string, unknown>,
+  path: string
+): unknown {
+  let value: unknown = variables;
+  for (const key of path.split(".")) {
+    if (typeof value !== "object" || value === null) return undefined;
+    value = (value as Record<string, unknown>)[key];
+  }
+  return value;
+}
+
 function interpolateVariables(
   text: string,
   variables: Record<string, unknown>
 ): string {
-  return text.replace(/\{\{(\w+)\}\}/g, (_, key) => {
-    return String(variables[key] ?? `{{${key}}}`);
+  // Supports dot paths ({{myvar.data.name}}) into object variables (e.g. parsed
+  // httpRequest JSON responses). Unresolved paths leave the token literal.
+  return text.replace(/\{\{(\w+(?:\.\w+)*)\}\}/g, (token, path: string) => {
+    const value = resolveVariablePath(variables, path);
+    if (value === null || value === undefined) return token;
+    return typeof value === "object" ? JSON.stringify(value) : String(value);
   });
 }

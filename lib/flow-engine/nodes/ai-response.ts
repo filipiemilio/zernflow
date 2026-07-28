@@ -4,10 +4,25 @@ import type { FlowExecutionContext, AiResponseNodeData } from "../types";
 import { createZernioClient } from "@/lib/zernio-client";
 import { generateText, createGateway } from "ai";
 
+// Halt the run: continuing would let a downstream Send Message deliver the
+// literal "{{ai_response}}" token to the contact (same pause mechanism as
+// humanTakeover, but the session is cancelled rather than completed).
+async function cancelRun(
+  supabase: SupabaseClient<Database>,
+  sessionId: string
+): Promise<"pause"> {
+  await supabase
+    .from("flow_sessions")
+    .update({ status: "cancelled" })
+    .eq("id", sessionId);
+  return "pause";
+}
+
 export async function executeAiResponse(
   supabase: SupabaseClient<Database>,
   data: AiResponseNodeData,
-  context: FlowExecutionContext
+  context: FlowExecutionContext,
+  sessionId: string
 ) {
   // Get workspace for Zernio API key + AI Gateway key
   const { data: workspace } = await supabase
@@ -16,7 +31,10 @@ export async function executeAiResponse(
     .eq("id", context.workspaceId)
     .single();
 
-  if (!workspace?.late_api_key_encrypted) return;
+  if (!workspace?.late_api_key_encrypted) {
+    console.error("No Zernio API key for workspace:", context.workspaceId);
+    return cancelRun(supabase, sessionId);
+  }
 
   const zernio = createZernioClient(workspace.late_api_key_encrypted);
 
@@ -29,7 +47,10 @@ export async function executeAiResponse(
       .eq("id", context.channelId)
       .single();
 
-    if (!channel) return;
+    if (!channel) {
+      console.error("No channel found for id:", context.channelId);
+      return cancelRun(supabase, sessionId);
+    }
     lateAccountId = channel.late_account_id;
     if (!context.platform) {
       context.platform = channel.platform as FlowExecutionContext["platform"];
@@ -47,7 +68,7 @@ export async function executeAiResponse(
 
     if (!conversation?.late_conversation_id) {
       console.error("No late_conversation_id found for conversation:", context.conversationId);
-      return;
+      return cancelRun(supabase, sessionId);
     }
     lateConversationId = conversation.late_conversation_id;
   }
@@ -137,5 +158,7 @@ export async function executeAiResponse(
       event_type: "message_failed",
       metadata: { error: error instanceof Error ? error.message : "Unknown error" },
     });
+
+    return cancelRun(supabase, sessionId);
   }
 }
