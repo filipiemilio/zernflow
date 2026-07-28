@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Database } from "@/lib/types/database";
+import type { Database, Json } from "@/lib/types/database";
 import type {
   FlowNode,
   FlowEdge,
@@ -25,6 +25,18 @@ export async function executeFlow(
   supabase: SupabaseClient<Database>,
   context: FlowExecutionContext
 ) {
+  // Ensure variables always exists so nodes (aiResponse, httpRequest) can write
+  // outputs even when the trigger passed none (e.g. DM-triggered flows).
+  context.variables ??= {};
+
+  // Seed {{message}} from the incoming message text so the variable offered in
+  // the builder resolves in production, not just in the simulator (which seeds
+  // it itself). Guarded so cron resumes with an empty incomingMessage don't
+  // clobber a previously stored value.
+  if (context.incomingMessage.text) {
+    context.variables.message ??= context.incomingMessage.text;
+  }
+
   // Check for active session waiting for input
   const { data: activeSession } = await supabase
     .from("flow_sessions")
@@ -159,6 +171,11 @@ async function resumeSession(
 
   context.variables = (session.variables as Record<string, string>) || {};
 
+  // The resume is driven by a fresh reply; make {{message}} reflect it.
+  if (context.incomingMessage.text) {
+    context.variables.message = context.incomingMessage.text;
+  }
+
   // Update session
   await supabase
     .from("flow_sessions")
@@ -216,6 +233,15 @@ async function traverseNodes(
 
   // Execute the node
   const result = await executeNode(supabase, node, context, sessionId);
+
+  // Persist variables written by output-producing nodes so they survive
+  // pauses (resumeSession reloads them from the session row).
+  if (node.type === "aiResponse" || node.type === "httpRequest") {
+    await supabase
+      .from("flow_sessions")
+      .update({ variables: (context.variables ?? {}) as Json })
+      .eq("id", sessionId);
+  }
 
   // If the node pauses execution (delay, wait for input, human takeover), stop
   if (result === "pause") return;
@@ -605,6 +631,7 @@ async function executeDelay(
       workspaceId: context.workspaceId,
       lateConversationId: context.lateConversationId || null,
       lateAccountId: context.lateAccountId || null,
+      variables: context.variables || {},
     },
     run_at: runAt,
   });
