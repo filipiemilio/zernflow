@@ -161,7 +161,7 @@ export function ActionNode({ data, selected }: NodeProps) {
       <Handle
         type="target"
         position={Position.Top}
-        className="!h-3 !w-3 !border-2 !border-gray-400 !bg-white"
+        className="zf-handle text-gray-400"
       />
       <div
         className={cn(
@@ -189,7 +189,7 @@ export function ActionNode({ data, selected }: NodeProps) {
               position={Position.Bottom}
               id={`split-${i}`}
               style={{ left: `${((i + 1) / (paths.length + 1)) * 100}%` }}
-              className="!h-3 !w-3 !border-2 !border-gray-400 !bg-white"
+              className="zf-handle text-gray-400"
             />
           ))}
         </>
@@ -197,7 +197,7 @@ export function ActionNode({ data, selected }: NodeProps) {
         <Handle
           type="source"
           position={Position.Bottom}
-          className="!h-3 !w-3 !border-2 !border-gray-400 !bg-white"
+          className="zf-handle text-gray-400"
         />
       )}
     </div>

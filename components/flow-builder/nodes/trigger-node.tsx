@@ -56,7 +56,7 @@ export function TriggerNode({ data, selected }: NodeProps) {
       <Handle
         type="source"
         position={Position.Bottom}
-        className="!h-3 !w-3 !border-2 !border-emerald-500 !bg-white"
+        className="zf-handle text-emerald-500"
       />
     </div>
   );

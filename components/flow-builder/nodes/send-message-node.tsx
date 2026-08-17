@@ -35,7 +35,7 @@ export function SendMessageNode({ data, selected }: NodeProps) {
       <Handle
         type="target"
         position={Position.Top}
-        className="!h-3 !w-3 !border-2 !border-blue-500 !bg-white"
+        className="zf-handle text-blue-500"
       />
       <div className="flex items-center gap-2 rounded-t-lg bg-blue-500 px-3 py-2 text-white">
         <MessageSquare className="h-3.5 w-3.5" />
@@ -70,7 +70,7 @@ export function SendMessageNode({ data, selected }: NodeProps) {
       <Handle
         type="source"
         position={Position.Bottom}
-        className="!h-3 !w-3 !border-2 !border-blue-500 !bg-white"
+        className="zf-handle text-blue-500"
       />
     </div>
   );

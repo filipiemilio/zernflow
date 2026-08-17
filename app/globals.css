@@ -94,3 +94,51 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ── Flow builder canvas ──────────────────────────────────────────────────
+   Connectors read their tint from the node's own text colour via
+   currentColor, so this one rule dresses every handle and the halo follows
+   whatever accent the node already uses. Selectors are prefixed with
+   .react-flow so they outrank the library's defaults regardless of import
+   order, and the edge stroke lives here rather than on each edge object so
+   flows saved with older inline styles still render consistently. */
+:root {
+  --flow-edge: oklch(0.72 0.13 172);
+}
+
+.react-flow__handle.zf-handle {
+  height: 0.75rem;
+  width: 0.75rem;
+  border: 2px solid currentColor;
+  background-color: var(--background);
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, currentColor 10%, transparent),
+    0 0 12px 2px color-mix(in srgb, currentColor 28%, transparent);
+  transition:
+    box-shadow 150ms ease,
+    border-color 150ms ease;
+}
+
+.react-flow__handle.zf-handle:hover,
+.react-flow__handle.zf-handle.connectingfrom,
+.react-flow__handle.zf-handle.connectingto {
+  box-shadow:
+    0 0 0 5px color-mix(in srgb, currentColor 18%, transparent),
+    0 0 18px 4px color-mix(in srgb, currentColor 48%, transparent);
+}
+
+.react-flow .react-flow__edge-path {
+  stroke: var(--flow-edge);
+  stroke-width: 2;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--flow-edge) 38%, transparent));
+}
+
+.react-flow .react-flow__edge.selected .react-flow__edge-path {
+  filter: drop-shadow(0 0 9px color-mix(in srgb, var(--flow-edge) 68%, transparent));
+}
+
+.react-flow .react-flow__connection-path {
+  stroke: var(--flow-edge);
+  stroke-width: 2;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--flow-edge) 38%, transparent));
+}

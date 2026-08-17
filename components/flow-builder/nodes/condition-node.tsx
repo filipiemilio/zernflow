@@ -43,7 +43,7 @@ export function ConditionNode({ data, selected }: NodeProps) {
       <Handle
         type="target"
         position={Position.Top}
-        className="!h-3 !w-3 !border-2 !border-amber-500 !bg-white"
+        className="zf-handle text-amber-500"
       />
       <div className="flex items-center gap-2 rounded-t-lg bg-amber-500 px-3 py-2 text-white">
         <GitBranch className="h-3.5 w-3.5" />
@@ -84,14 +84,14 @@ export function ConditionNode({ data, selected }: NodeProps) {
         position={Position.Bottom}
         id={CONDITION_TRUE_HANDLE}
         style={{ left: "30%" }}
-        className="!h-3 !w-3 !border-2 !border-emerald-500 !bg-white"
+        className="zf-handle text-emerald-500"
       />
       <Handle
         type="source"
         position={Position.Bottom}
         id={CONDITION_FALSE_HANDLE}
         style={{ left: "70%" }}
-        className="!h-3 !w-3 !border-2 !border-red-500 !bg-white"
+        className="zf-handle text-red-500"
       />
     </div>
   );

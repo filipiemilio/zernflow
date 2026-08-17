@@ -25,7 +25,7 @@ export function AiResponseNode({ data, selected }: NodeProps) {
       <Handle
         type="target"
         position={Position.Top}
-        className="!h-3 !w-3 !border-2 !border-violet-500 !bg-white"
+        className="zf-handle text-violet-500"
       />
       <div className="flex items-center gap-2 rounded-t-lg bg-violet-500 px-3 py-2 text-white">
         <Sparkles className="h-3.5 w-3.5" />
@@ -51,7 +51,7 @@ export function AiResponseNode({ data, selected }: NodeProps) {
       <Handle
         type="source"
         position={Position.Bottom}
-        className="!h-3 !w-3 !border-2 !border-violet-500 !bg-white"
+        className="zf-handle text-violet-500"
       />
     </div>
   );

@@ -115,8 +115,16 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
   const initialNodes: Node[] = Array.isArray(flow.nodes)
     ? (flow.nodes as unknown as Node[])
     : [];
+  // Edge styling lives in globals.css now. Older flows saved a stroke and the
+  // dashed animation onto each edge, and inline styles would outrank the
+  // stylesheet, so drop them and let every edge render the same way.
   const initialEdges: Edge[] = Array.isArray(flow.edges)
-    ? (flow.edges as unknown as Edge[])
+    ? (flow.edges as unknown as Edge[]).map((edge) => {
+        const normalized = { ...edge };
+        delete normalized.style;
+        delete normalized.animated;
+        return normalized;
+      })
     : [];
 
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
@@ -140,14 +148,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
   const onConnect = useCallback(
     (connection: Connection) => {
       setEdges((eds) =>
-        addEdge(
-          {
-            ...connection,
-            animated: true,
-            style: { stroke: "var(--border)", strokeWidth: 2 },
-          },
-          eds
-        )
+        addEdge({ ...connection }, eds)
       );
     },
     [setEdges]
@@ -622,7 +623,12 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
             proOptions={{ hideAttribution: true }}
             className="bg-background"
           >
-            <Background gap={16} size={1} className="!bg-background" />
+            <Background
+              gap={18}
+              size={1}
+              color="var(--border)"
+              className="!bg-background"
+            />
             <Controls
               className="!border-border !bg-card !shadow-sm [&>button]:!border-border [&>button]:!bg-card [&>button]:!text-foreground [&>button:hover]:!bg-accent"
             />
