@@ -1,6 +1,7 @@
 import { cache } from "react";
 import { cookies } from "next/headers";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { defaultWorkspaceIdentity } from "@/lib/workspace-bootstrap";
 import { redirect } from "next/navigation";
 
 export const WORKSPACE_COOKIE = "zernflow_workspace_id";
@@ -47,7 +48,45 @@ export const getWorkspace = cache(async () => {
     .limit(1)
     .single();
 
-  if (!membership?.workspaces) redirect("/login");
+  if (!membership?.workspaces) {
+    // A newly registered user has no membership yet. Creating the first
+    // workspace with the user-scoped client is impossible because the RLS
+    // policy requires an existing owner membership. Bootstrap it server-side.
+    const serviceClient = await createServiceClient();
+    const identity = defaultWorkspaceIdentity(user);
+
+    const { data: workspace, error: workspaceError } = await serviceClient
+      .from("workspaces")
+      .upsert(identity, { onConflict: "slug" })
+      .select("*")
+      .single();
+
+    if (workspaceError || !workspace) {
+      throw new Error(
+        `Failed to create initial workspace: ${workspaceError?.message ?? "unknown error"}`
+      );
+    }
+
+    const { error: membershipError } = await serviceClient
+      .from("workspace_members")
+      .upsert(
+        { workspace_id: workspace.id, user_id: user.id, role: "owner" },
+        { onConflict: "workspace_id,user_id" }
+      );
+
+    if (membershipError) {
+      throw new Error(
+        `Failed to create initial workspace membership: ${membershipError.message}`
+      );
+    }
+
+    return {
+      user,
+      workspace,
+      role: "owner",
+      supabase,
+    };
+  }
 
   return {
     user,

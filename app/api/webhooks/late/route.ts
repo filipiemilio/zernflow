@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { after } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
-import { executeFlow } from "@/lib/flow-engine/engine";
+import { executeFlow, resumeSession } from "@/lib/flow-engine/engine";
+import { matchesWaitingSessionInput } from "@/lib/flow-engine/session-input";
 import { matchTrigger } from "@/lib/flow-engine/trigger-matcher";
 import { resolveWebhookSecret, verifyWebhookSignature } from "@/lib/zernio-webhook";
 import { upsertContactForSender } from "@/lib/inbox-sync";
 import { processComment } from "@/lib/comment-processor";
-import type { Database } from "@/lib/types/database";
+import {
+  isOptInText,
+  isOptOutText,
+  isStandardMessagingWindowOpen,
+} from "@/lib/automation-safety";
+import type { Database, Json } from "@/lib/types/database";
 
 // ── Zernio API webhook payload ───────────────────────────────────────────────
 
@@ -26,6 +32,10 @@ interface WebhookPayload {
       name: string;
       username: string | null;
       picture: string | null;
+      instagramProfile?: {
+        isFollower?: boolean | null;
+        isFollowing?: boolean | null;
+      } | null;
     };
     sentAt: string;
     isRead: boolean;
@@ -98,15 +108,18 @@ async function claimWebhookEvent(
   supabase: Awaited<ReturnType<typeof createServiceClient>>,
   eventId: string | null | undefined
 ): Promise<boolean> {
-  if (!eventId) return true;
+  if (!eventId) {
+    throw new Error("Webhook event has no stable id");
+  }
   const { error } = await supabase
     .from("webhook_events")
     .insert({ event_id: eventId });
   if (!error) return true;
   if (error.code === "23505") return false;
-  // Table missing / transient DB error: fail open so deliveries keep working.
-  console.error("webhook_events claim failed:", error);
-  return true;
+  // Failing open here permits the original delivery and every retry to execute
+  // during a DB incident. Return 5xx instead so Zernio retries after durability
+  // is restored, without multiplying Instagram side effects.
+  throw new Error(`Webhook event claim failed: ${error.message}`);
 }
 
 async function handleWebhook(request: NextRequest) {
@@ -121,7 +134,13 @@ async function handleWebhook(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const eventId = parsed.id || headerEventId;
+  const rawEventId =
+    parsed.id ||
+    headerEventId ||
+    (parsed as { message?: { id?: string } }).message?.id ||
+    (parsed as { comment?: { id?: string } }).comment?.id;
+  const accountId = (parsed as { account?: { id?: string } }).account?.id || "unknown";
+  const eventId = rawEventId ? `${parsed.event}:${accountId}:${rawEventId}` : null;
 
   if (parsed.event === "comment.received") {
     return handleCommentWebhook(parsed as CommentWebhookPayload, body, signature, eventId);
@@ -175,7 +194,11 @@ async function handleWebhook(request: NextRequest) {
   // Verify HMAC-SHA256 signature against the workspace-level secret
   // (falls back to the legacy per-channel secret during transition).
   const secret = await resolveWebhookSecret(supabase, channel);
-  if (secret && !verifyWebhookSignature(secret, body, signature)) {
+  if (!secret) {
+    console.error(`Webhook secret missing for workspace ${channel.workspace_id}`);
+    return NextResponse.json({ error: "Webhook verification unavailable" }, { status: 503 });
+  }
+  if (!verifyWebhookSignature(secret, body, signature)) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
 
@@ -208,6 +231,11 @@ async function processMessageEvent(
 
   const senderId = msg.sender.id;
   const senderName = msg.sender.name || msg.sender.username || senderId;
+  const parsedSentAt = Date.parse(msg.sentAt);
+  const interactionAt =
+    Number.isFinite(parsedSentAt) && parsedSentAt <= Date.now() + 5 * 60 * 1000
+      ? new Date(parsedSentAt).toISOString()
+      : new Date().toISOString();
 
   const contact = await upsertContactForSender({
     supabase,
@@ -216,7 +244,7 @@ async function processMessageEvent(
     senderName,
     senderPicture: msg.sender.picture || null,
     senderUsername: msg.sender.username || null,
-    interactionAt: new Date().toISOString(),
+    interactionAt,
   });
 
   if (!contact) {
@@ -225,6 +253,30 @@ async function processMessageEvent(
   }
 
   const contactId = contact.contactId;
+
+  // Only a verified inbound DM/quick reply/postback opens Instagram's standard
+  // messaging window. Comment events never write this marker. Store the provider
+  // timestamp rather than webhook receipt time so delayed/replayed events cannot
+  // manufacture a fresh 24-hour window.
+  const { data: contactState } = await supabase
+    .from("contacts")
+    .select("metadata")
+    .eq("id", contactId)
+    .single();
+  const existingMetadata =
+    contactState?.metadata && typeof contactState.metadata === "object" && !Array.isArray(contactState.metadata)
+      ? (contactState.metadata as Record<string, Json | undefined>)
+      : {};
+  await supabase
+    .from("contacts")
+    .update({
+      last_interaction_at: interactionAt,
+      metadata: {
+        ...existingMetadata,
+        instagram_last_user_interaction_at: interactionAt,
+      } as Json,
+    })
+    .eq("id", contactId);
 
   // ── Upsert conversation ──────────────────────────────────────────────────
 
@@ -267,51 +319,114 @@ async function processMessageEvent(
 
   // ── Flow engine ───────────────────────────────────────────────────────────
 
-  if (!conversation.is_automation_paused) {
-    const incomingMessage = {
-      text: msg.text || undefined,
-      postbackPayload: metadata?.postbackPayload || undefined,
-      quickReplyPayload: metadata?.quickReplyPayload || undefined,
-      callbackData: metadata?.callbackData || undefined,
-      sender: {
-        id: msg.sender.id,
-        name: msg.sender.name,
-        username: msg.sender.username || undefined,
-      },
-    };
+  const incomingMessage = {
+    text: msg.text || undefined,
+    postbackPayload: metadata?.postbackPayload || undefined,
+    quickReplyPayload: metadata?.quickReplyPayload || undefined,
+    callbackData: metadata?.callbackData || undefined,
+    sender: {
+      id: msg.sender.id,
+      name: msg.sender.name,
+      username: msg.sender.username || undefined,
+      instagramProfile: msg.sender.instagramProfile || undefined,
+    },
+  };
 
-    const handled = await handleGlobalKeywords(
-      supabase,
-      channel.workspace_id,
-      contactId,
-      msg.text || undefined
-    );
+  // Opt-out is mandatory even while human takeover has paused automation.
+  const handled = await handleGlobalKeywords(
+    supabase,
+    channel.workspace_id,
+    contactId,
+    msg.text || undefined,
+  );
+  if (handled || conversation.is_automation_paused) return;
 
-    if (!handled) {
-      const trigger = await matchTrigger(supabase, {
+  const { data: subscription } = await supabase
+    .from("contacts")
+    .select("is_subscribed")
+    .eq("id", contactId)
+    .single();
+  if (!subscription?.is_subscribed) return;
+
+  // Old/replayed inbound events are still synced to Inbox and can opt out, but
+  // cannot open/resume an automation or manufacture a new 24-hour window.
+  if (!isStandardMessagingWindowOpen(interactionAt)) return;
+
+  const { data: waitingSessions } = await supabase
+    .from("flow_sessions")
+    .select("*")
+    .eq("contact_id", contactId)
+    .eq("channel_id", channel.id)
+    .eq("status", "active")
+    .eq("waiting_for_input", true)
+    .order("created_at", { ascending: false })
+    .limit(10);
+
+  const waitingSession = waitingSessions?.[0];
+  if (waitingSession) {
+    // Only one input wait per contact/channel is supported. Settle any legacy
+    // extras deterministically instead of routing one reply arbitrarily.
+    const staleIds = (waitingSessions ?? []).slice(1).map((session) => session.id);
+    if (staleIds.length > 0) {
+      await supabase
+        .from("flow_sessions")
+        .update({ status: "cancelled", waiting_for_input: false })
+        .in("id", staleIds);
+    }
+
+    const { data: waitingFlow } = await supabase
+      .from("flows")
+      .select("nodes")
+      .eq("id", waitingSession.flow_id)
+      .single();
+    const nodes = Array.isArray(waitingFlow?.nodes)
+      ? (waitingFlow.nodes as Array<{ id: string; data?: Record<string, unknown> }>)
+      : [];
+    if (!matchesWaitingSessionInput(waitingSession, nodes, incomingMessage)) {
+      console.warn(`Inbound interaction did not match waiting session ${waitingSession.id}`);
+      return;
+    }
+
+    try {
+      await resumeSession(supabase, waitingSession, {
+        triggerId: "session_resume",
+        flowId: waitingSession.flow_id,
         channelId: channel.id,
-        workspaceId: channel.workspace_id,
+        contactId,
         conversationId: conversation.id,
-        message: incomingMessage,
-        isFirstMessage: !contact.existed,
+        workspaceId: channel.workspace_id,
+        incomingMessage,
+        lateConversationId: conv.id,
+        lateAccountId: account.id,
       });
-      if (trigger) {
-        try {
-          await executeFlow(supabase, {
-            triggerId: trigger.id,
-            flowId: trigger.flow_id,
-            channelId: channel.id,
-            contactId,
-            conversationId: conversation.id,
-            workspaceId: channel.workspace_id,
-            incomingMessage,
-            lateConversationId: conv.id,
-            lateAccountId: account.id,
-          });
-        } catch (err) {
-          console.error("Flow execution error:", err);
-        }
-      }
+    } catch (err) {
+      console.error("Flow session resume error:", err);
+    }
+    return;
+  }
+
+  const trigger = await matchTrigger(supabase, {
+    channelId: channel.id,
+    workspaceId: channel.workspace_id,
+    conversationId: conversation.id,
+    message: incomingMessage,
+    isFirstMessage: !contact.existed,
+  });
+  if (trigger) {
+    try {
+      await executeFlow(supabase, {
+        triggerId: trigger.id,
+        flowId: trigger.flow_id,
+        channelId: channel.id,
+        contactId,
+        conversationId: conversation.id,
+        workspaceId: channel.workspace_id,
+        incomingMessage,
+        lateConversationId: conv.id,
+        lateAccountId: account.id,
+      });
+    } catch (err) {
+      console.error("Flow execution error:", err);
     }
   }
 }
@@ -347,7 +462,11 @@ async function handleCommentWebhook(
   }
 
   const secret = await resolveWebhookSecret(supabase, channel);
-  if (secret && !verifyWebhookSignature(secret, rawBody, signature)) {
+  if (!secret) {
+    console.error(`Webhook secret missing for workspace ${channel.workspace_id}`);
+    return NextResponse.json({ error: "Webhook verification unavailable" }, { status: 503 });
+  }
+  if (!verifyWebhookSignature(secret, rawBody, signature)) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 401 });
   }
 
@@ -370,6 +489,9 @@ async function handleCommentWebhook(
           // endpoint only needs the comment id, so the placeholder is harmless.
           postId: payload.comment.postId || payload.comment.platformPostId,
           text: payload.comment.text,
+          createdAt: payload.comment.createdAt,
+          isReply: payload.comment.isReply,
+          parentCommentId: payload.comment.parentCommentId,
           author: payload.comment.author,
         },
       });
@@ -383,6 +505,33 @@ async function handleCommentWebhook(
 
 // ── Global keywords ─────────────────────────────────────────────────────────
 
+async function suppressContactAutomation(
+  supabase: Awaited<ReturnType<typeof createServiceClient>>,
+  contactId: string,
+) {
+  await Promise.all([
+    supabase
+      .from("contacts")
+      .update({ is_subscribed: false })
+      .eq("id", contactId),
+    supabase
+      .from("flow_sessions")
+      .update({ status: "cancelled", waiting_for_input: false })
+      .eq("contact_id", contactId)
+      .eq("status", "active"),
+    supabase
+      .from("sequence_enrollments")
+      .update({ status: "cancelled" })
+      .eq("contact_id", contactId)
+      .eq("status", "active"),
+    supabase
+      .from("scheduled_jobs")
+      .update({ status: "failed", last_error: "Contact opted out" })
+      .contains("payload", { contactId })
+      .in("status", ["pending", "processing"]),
+  ]);
+}
+
 async function handleGlobalKeywords(
   supabase: Awaited<ReturnType<typeof createServiceClient>>,
   workspaceId: string,
@@ -391,39 +540,43 @@ async function handleGlobalKeywords(
 ): Promise<boolean> {
   if (!text) return false;
 
+  // Mandatory system commands cannot be removed by workspace configuration.
+  if (isOptOutText(text)) {
+    await suppressContactAutomation(supabase, contactId);
+    return true;
+  }
+  if (isOptInText(text)) {
+    await supabase.from("contacts").update({ is_subscribed: true }).eq("id", contactId);
+    return true;
+  }
+
   const { data: workspace } = await supabase
     .from("workspaces")
     .select("global_keywords")
     .eq("id", workspaceId)
     .single();
 
-  if (!workspace?.global_keywords) return false;
+  // Historical rows may contain action objects while the settings UI stores
+  // strings. Inspect defensively; plain strings are flow keywords, not actions.
+  const keywords = Array.isArray(workspace?.global_keywords)
+    ? workspace.global_keywords
+    : [];
+  const normalizedText = text.toLocaleLowerCase("pt-BR").trim();
 
-  const keywords = workspace.global_keywords as Array<{
-    keyword: string;
-    action?: string;
-    flowId?: string;
-  }>;
-
-  const normalizedText = text.toLowerCase().trim();
-
-  for (const kw of keywords) {
-    if (normalizedText === kw.keyword.toLowerCase()) {
-      if (kw.action === "unsubscribe") {
-        await supabase
-          .from("contacts")
-          .update({ is_subscribed: false })
-          .eq("id", contactId);
-        return true;
-      }
-      if (kw.action === "subscribe") {
-        await supabase
-          .from("contacts")
-          .update({ is_subscribed: true })
-          .eq("id", contactId);
-        return true;
-      }
-      return false;
+  for (const value of keywords) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+    const keyword = (value as Record<string, unknown>).keyword;
+    const action = (value as Record<string, unknown>).action;
+    if (typeof keyword !== "string" || normalizedText !== keyword.toLocaleLowerCase("pt-BR")) {
+      continue;
+    }
+    if (action === "unsubscribe") {
+      await suppressContactAutomation(supabase, contactId);
+      return true;
+    }
+    if (action === "subscribe") {
+      await supabase.from("contacts").update({ is_subscribed: true }).eq("id", contactId);
+      return true;
     }
   }
 

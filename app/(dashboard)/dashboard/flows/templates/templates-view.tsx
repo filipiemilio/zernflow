@@ -11,8 +11,13 @@ import {
   Loader2,
   BookmarkPlus,
   ArrowLeft,
+  Instagram,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  instagramFollowerGateTemplate,
+  instagramFollowerRequiredTemplate,
+} from "@/lib/flow-templates";
 import Link from "next/link";
 
 // --- Template types ---
@@ -271,9 +276,29 @@ const templates: FlowTemplate[] = [
       { id: "e7", source: "set-email", target: "tag-lead" },
     ],
   },
+  {
+    id: "instagram-follower-gate",
+    name: "Instagram Comment-to-DM Seguro",
+    description:
+      "Ask for an opening interaction, personalize by follower status, and deliver the promised link on both branches with an optional follow invitation.",
+    category: "Instagram",
+    icon: Instagram,
+    iconColor: "text-pink-600",
+    iconBg: "bg-pink-100",
+    ...instagramFollowerGateTemplate(),
+  },
+  {
+    id: "instagram-follower-required",
+    name: "Instagram Comment-to-DM — Follow Obrigatório",
+    description:
+      "Pede para seguir o perfil, aguarda o botão “Já segui”, verifica novamente e só então envia o link. Use por sua conta e risco.",
+    category: "Instagram",
+    icon: Instagram,
+    iconColor: "text-rose-700",
+    iconBg: "bg-rose-100",
+    ...instagramFollowerRequiredTemplate(),
+  },
 ];
-
-// --- Component ---
 
 export function TemplatesView({ workspaceId }: { workspaceId: string }) {
   const router = useRouter();

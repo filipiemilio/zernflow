@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { FlowLoadError, resumeSession } from "@/lib/flow-engine/engine";
 import type { Json } from "@/lib/types/database";
+import { isStandardMessagingWindowOpen } from "@/lib/automation-safety";
+import { instagramOutboundRateLimiter } from "@/lib/instagram-rate-limit";
 
 // Signals the handler to skip retry/backoff and route straight to the
 // failed + settle branch (which performs/re-attempts the session cancel).
@@ -31,14 +33,13 @@ function wasSessionWrittenRecently(updatedAt: string): boolean {
 /**
  * Cron job handler that processes scheduled jobs.
  * Call via Vercel Cron or external cron every 10-30 seconds.
- * GET /api/cron/jobs?key=CRON_SECRET
+ * GET /api/cron/jobs with Authorization: Bearer <CRON_SECRET>
  */
 export async function GET(request: NextRequest) {
-  // Simple auth via query param or header
+  // Header-only auth prevents secrets from leaking into URLs, reverse-proxy
+  // access logs, browser history, or monitoring systems.
   const cronSecret = process.env.CRON_SECRET;
-  const providedSecret =
-    request.nextUrl.searchParams.get("key") ||
-    request.headers.get("authorization")?.replace("Bearer ", "");
+  const providedSecret = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
 
   if (!cronSecret || providedSecret !== cronSecret) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -544,6 +545,39 @@ async function processJob(
 
       if (recipient.status !== "pending") return;
 
+      const contact = recipient.contacts as {
+        is_subscribed?: boolean;
+        metadata?: unknown;
+      } | null;
+      const channel = recipient.channels as {
+        late_account_id: string;
+        platform?: string;
+      } | null;
+      const contactMetadata =
+        contact?.metadata && typeof contact.metadata === "object" && !Array.isArray(contact.metadata)
+          ? (contact.metadata as Record<string, unknown>)
+          : {};
+      const lastInbound =
+        typeof contactMetadata.instagram_last_user_interaction_at === "string"
+          ? contactMetadata.instagram_last_user_interaction_at
+          : undefined;
+      const blockedBySafety =
+        !contact?.is_subscribed ||
+        (channel?.platform === "instagram" && !isStandardMessagingWindowOpen(lastInbound));
+      if (blockedBySafety) {
+        await supabase
+          .from("broadcast_recipients")
+          .update({
+            status: "failed",
+            error_message: "Suppressed by contact opt-out or Instagram 24h window",
+          })
+          .eq("id", payload.recipientId)
+          .eq("status", "pending");
+        await supabase.rpc("increment_broadcast_failed", { b_id: payload.broadcastId });
+        await settleBroadcastIfDone(supabase, payload.broadcastId);
+        return;
+      }
+
       // Get workspace API key
       const broadcast = recipient.broadcasts as { workspace_id: string } | null;
       if (!broadcast) return;
@@ -559,7 +593,6 @@ async function processJob(
       const { createZernioClient } = await import("@/lib/zernio-client");
       const zernio = createZernioClient(workspace.late_api_key_encrypted);
 
-      const channel = recipient.channels as { late_account_id: string } | null;
       if (!channel) return;
 
       // Get the conversation for this contact+channel (need late_conversation_id)
@@ -574,6 +607,13 @@ async function processJob(
 
       const broadcastData = recipient.broadcasts as { message_content: { text?: string } } | null;
       const messageContent = broadcastData?.message_content;
+
+      if (
+        channel.platform === "instagram" &&
+        !instagramOutboundRateLimiter.reserve(channel.late_account_id, "direct_message")
+      ) {
+        throw new Error("Instagram direct-message burst limit reached; retry later");
+      }
 
       // CAS to 'sending' before the API call so a crash between the send and
       // the 'sent' write cannot cause a re-send when the job is reclaimed

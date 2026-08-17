@@ -3,6 +3,7 @@
 import {
   Zap,
   MessageSquare,
+  MessageSquareReply,
   GitBranch,
   Clock,
   Tag,
@@ -59,6 +60,12 @@ const categories: PaletteCategory[] = [
     name: "Logic",
     items: [
       { type: "condition", nodeType: "condition", label: "Condition", icon: GitBranch },
+      {
+        type: "condition",
+        nodeType: "instagramFollower",
+        label: "Instagram Follower",
+        icon: UserCheck,
+      },
       { type: "delay", nodeType: "delay", label: "Delay", icon: Clock },
       {
         type: "action",
@@ -79,6 +86,13 @@ const categories: PaletteCategory[] = [
   {
     name: "Actions",
     items: [
+      {
+        type: "action",
+        nodeType: "commentReply",
+        label: "Comment Reply",
+        icon: MessageSquareReply,
+        actionType: "commentReply",
+      },
       {
         type: "action",
         nodeType: "addTag",

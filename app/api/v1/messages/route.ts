@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createZernioClient } from "@/lib/zernio-client";
+import { isStandardMessagingWindowOpen } from "@/lib/automation-safety";
+import { instagramOutboundRateLimiter } from "@/lib/instagram-rate-limit";
 
 /**
  * GET /api/v1/messages?conversationId=...
@@ -127,9 +129,40 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const channel = conversation.channels as { late_account_id: string } | null;
+  const channel = conversation.channels as {
+    late_account_id: string;
+    platform?: string;
+  } | null;
   if (!channel?.late_account_id) {
     return NextResponse.json({ error: "Channel not found or missing Zernio account ID" }, { status: 404 });
+  }
+
+  if (channel.platform === "instagram") {
+    const { data: contact } = await supabase
+      .from("contacts")
+      .select("metadata")
+      .eq("id", conversation.contact_id)
+      .single();
+    const metadata =
+      contact?.metadata && typeof contact.metadata === "object" && !Array.isArray(contact.metadata)
+        ? (contact.metadata as Record<string, unknown>)
+        : {};
+    const lastInbound =
+      typeof metadata.instagram_last_user_interaction_at === "string"
+        ? metadata.instagram_last_user_interaction_at
+        : undefined;
+    if (!isStandardMessagingWindowOpen(lastInbound)) {
+      return NextResponse.json(
+        { error: "Instagram 24-hour messaging window is closed" },
+        { status: 409 },
+      );
+    }
+    if (!instagramOutboundRateLimiter.reserve(channel.late_account_id, "direct_message")) {
+      return NextResponse.json(
+        { error: "Instagram message rate limit reached; try again shortly" },
+        { status: 429 },
+      );
+    }
   }
 
   const { data: workspace } = await supabase

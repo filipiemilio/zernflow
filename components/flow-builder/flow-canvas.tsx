@@ -19,8 +19,22 @@ import "@xyflow/react/dist/style.css";
 
 import { useCallback, useRef, useState, type DragEvent } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Save, Rocket, Loader2, History, Play, Download, Trash2 } from "lucide-react";
+import {
+  ArrowLeft,
+  Save,
+  Rocket,
+  Loader2,
+  History,
+  Play,
+  Download,
+  Trash2,
+  CheckCircle2,
+  XCircle,
+  X,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
+import { duplicateConfiguredNode } from "@/lib/flow-builder/duplicate-node";
+import { formatPublishError } from "@/lib/flow-builder/publish-feedback";
 import { ConfirmDialog } from "@/components/confirm-dialog";
 import { createClient } from "@/lib/supabase/client";
 import type { Database, FlowStatus, Json } from "@/lib/types/database";
@@ -51,6 +65,12 @@ interface FlowCanvasProps {
   flow: Flow;
 }
 
+type PublishFeedback = {
+  status: "loading" | "success" | "error";
+  message: string;
+  details: string[];
+};
+
 let nodeId = 0;
 function getNodeId() {
   return `node_${Date.now()}_${nodeId++}`;
@@ -63,7 +83,14 @@ function getDefaultData(type: string, actionType?: string): Record<string, unkno
     case "sendMessage":
       return { messages: [] };
     case "condition":
-      return { conditions: [], logic: "and" };
+      return actionType === "instagramFollower"
+        ? {
+            label: "Is Instagram Follower?",
+            conditionType: "instagram_follower",
+            conditions: [{ field: "instagram_follower", operator: "equals", value: "true" }],
+            logic: "and",
+          }
+        : { conditions: [], logic: "and" };
     case "delay":
       return { duration: 5, unit: "minutes" };
     case "aiResponse":
@@ -98,6 +125,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
   const [versionPanelOpen, setVersionPanelOpen] = useState(false);
   const [testPanelOpen, setTestPanelOpen] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [publishFeedback, setPublishFeedback] = useState<PublishFeedback | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -191,8 +219,22 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
     [setNodes, setEdges]
   );
 
+  const duplicateNode = useCallback(
+    (nodeId: string) => {
+      const source = nodes.find((node) => node.id === nodeId);
+      if (!source) return;
+      const duplicateId = getNodeId();
+      setNodes((nds) => [
+        ...nds.map((node) => ({ ...node, selected: false })),
+        duplicateConfiguredNode(source, duplicateId),
+      ]);
+      setSelectedNodeId(duplicateId);
+    },
+    [nodes, setNodes]
+  );
+
   const saveFlow = useCallback(
-    async (status?: FlowStatus) => {
+    async (status?: FlowStatus): Promise<boolean> => {
       if (status === "published") {
         setPublishing(true);
       } else {
@@ -223,14 +265,23 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
           console.error("Failed to save flow:", error);
           setSaveError("Failed to save");
           setTimeout(() => setSaveError(null), 3000);
-          return;
+          return false;
         }
 
         setSaveError(null);
         setLastSaved(new Date());
+        return true;
+      } catch (error) {
+        console.error("Failed to save flow:", error);
+        setSaveError("Failed to save");
+        setTimeout(() => setSaveError(null), 3000);
+        return false;
       } finally {
-        setSaving(false);
-        setPublishing(false);
+        if (status === "published") {
+          setPublishing(false);
+        } else {
+          setSaving(false);
+        }
       }
     },
     [flowName, nodes, edges, flow.id, supabase]
@@ -260,29 +311,138 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
   }, [flow.id, router]);
   const handlePublish = useCallback(async () => {
     setPublishing(true);
+    setPublishFeedback({
+      status: "loading",
+      message: "Salvando e validando seu flow…",
+      details: [],
+    });
+
     try {
-      // First save the current state
-      await saveFlow();
-      // Then call the publish API which increments version and saves snapshot
+      const saved = await saveFlow();
+      if (!saved) {
+        setPublishFeedback({
+          status: "error",
+          message: "Não foi possível salvar as alterações antes de publicar.",
+          details: ["Verifique sua conexão e tente novamente."],
+        });
+        return;
+      }
+
       const res = await fetch(`/api/v1/flows/${flow.id}/publish`, {
         method: "POST",
       });
+      const payload: unknown = await res.json().catch(() => null);
+
       if (!res.ok) {
-        console.error("Failed to publish flow");
+        const formatted = formatPublishError(payload);
+        console.error("Failed to publish flow:", formatted);
         setSaveError("Failed to publish");
-        setTimeout(() => setSaveError(null), 3000);
+        setPublishFeedback({ status: "error", ...formatted });
         return;
       }
+
       setSaveError(null);
       setLastSaved(new Date());
+      setPublishFeedback({
+        status: "success",
+        message: "Seu flow está ativo e pronto para executar.",
+        details: [],
+      });
       router.refresh();
+      setTimeout(() => setPublishFeedback(null), 2600);
+    } catch (error) {
+      console.error("Failed to publish flow:", error);
+      setSaveError("Failed to publish");
+      setPublishFeedback({
+        status: "error",
+        message: "Não foi possível conectar ao servidor para publicar.",
+        details: ["Verifique sua conexão e tente novamente."],
+      });
     } finally {
       setPublishing(false);
     }
-  }, [saveFlow, flow.id]);
+  }, [saveFlow, flow.id, router]);
 
   return (
     <div className="flex h-full flex-col">
+      {publishFeedback && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-background/65 p-4 backdrop-blur-sm"
+          role={publishFeedback.status === "error" ? "alert" : "status"}
+          aria-live="assertive"
+        >
+          <div className="relative w-full max-w-md overflow-hidden rounded-3xl border border-border/80 bg-card p-8 text-center shadow-2xl">
+            {publishFeedback.status !== "loading" && (
+              <button
+                type="button"
+                onClick={() => setPublishFeedback(null)}
+                className="absolute right-4 top-4 rounded-full p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                aria-label="Fechar mensagem de publicação"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+
+            <div className="mb-5 flex justify-center">
+              {publishFeedback.status === "loading" && (
+                <div className="flex h-20 w-20 items-center justify-center rounded-full bg-primary/10">
+                  <Loader2 className="h-10 w-10 animate-spin text-primary" />
+                </div>
+              )}
+              {publishFeedback.status === "success" && (
+                <div className="relative flex h-20 w-20 items-center justify-center">
+                  <span className="absolute inset-0 animate-ping rounded-full bg-emerald-400/25" />
+                  <span className="absolute inset-1 rounded-full bg-emerald-500/15" />
+                  <CheckCircle2 className="relative h-14 w-14 text-emerald-500" strokeWidth={1.8} />
+                </div>
+              )}
+              {publishFeedback.status === "error" && (
+                <div className="relative flex h-20 w-20 items-center justify-center rounded-full bg-destructive/10">
+                  <XCircle className="h-14 w-14 text-destructive" strokeWidth={1.8} />
+                </div>
+              )}
+            </div>
+
+            <h2 className="text-xl font-semibold tracking-tight text-foreground">
+              {publishFeedback.status === "loading"
+                ? "Publicando…"
+                : publishFeedback.status === "success"
+                  ? "Publicado!"
+                  : "Não foi possível publicar"}
+            </h2>
+            <p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-muted-foreground">
+              {publishFeedback.message}
+            </p>
+
+            {publishFeedback.details.length > 0 && (
+              <div className="mt-5 max-h-48 overflow-y-auto rounded-2xl border border-destructive/20 bg-destructive/5 p-4 text-left">
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-destructive">
+                  O que precisa ser corrigido
+                </p>
+                <ul className="space-y-2 text-sm leading-5 text-foreground">
+                  {publishFeedback.details.map((detail, index) => (
+                    <li key={`${detail}-${index}`} className="flex gap-2">
+                      <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-destructive" />
+                      <span>{detail}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {publishFeedback.status === "error" && (
+              <button
+                type="button"
+                onClick={() => setPublishFeedback(null)}
+                className="mt-6 inline-flex items-center justify-center rounded-xl bg-foreground px-5 py-2.5 text-sm font-medium text-background transition-transform hover:scale-[1.02] active:scale-[0.98]"
+              >
+                Voltar e corrigir
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Toolbar */}
       <div className="flex items-center justify-between border-b border-border bg-card px-4 py-2">
         <div className="flex items-center gap-3">
@@ -306,7 +466,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
             className={cn(
               "inline-flex rounded-full px-2 py-0.5 text-[10px] font-medium",
               flow.status === "published"
-                ? "bg-emerald-100 text-emerald-800"
+                ? "bg-emerald-600 text-white dark:bg-emerald-500 dark:text-emerald-950"
                 : flow.status === "archived"
                   ? "bg-amber-100 text-amber-800"
                   : "bg-muted text-muted-foreground"
@@ -475,6 +635,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
             edges={edges}
             onChange={onNodeDataChange}
             onClose={closeSidebar}
+            onDuplicate={duplicateNode}
             onDelete={deleteNode}
           />
         )}

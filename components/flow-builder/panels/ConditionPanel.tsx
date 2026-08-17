@@ -27,6 +27,7 @@ const fieldOptions = [
   { value: "platform", label: "Platform" },
   { value: "variable", label: "Variable" },
   { value: "is_subscribed", label: "Is Subscribed" },
+  { value: "instagram_follower", label: "Follows Instagram account" },
   { value: "last_interaction", label: "Last Interaction" },
 ];
 

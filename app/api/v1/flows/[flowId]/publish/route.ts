@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import type { TriggerType } from "@/lib/types/database";
+import type { Database, TriggerType } from "@/lib/types/database";
+import { validateFlowForPublication } from "@/lib/flow-validator";
+import { normalizePostIds } from "@/lib/comment-trigger-config";
 
 export async function POST(
   _request: NextRequest,
@@ -38,6 +40,26 @@ export async function POST(
       { error: error?.message || "Flow not found" },
       { status: 404 }
     );
+
+  const flowNodesForValidation = Array.isArray(flow.nodes)
+    ? (flow.nodes as Array<{ id: string; type: string; data?: Record<string, unknown> }>)
+    : [];
+  const flowEdgesForValidation = Array.isArray(flow.edges)
+    ? (flow.edges as Array<{ source: string; target: string; sourceHandle?: string | null }>)
+    : [];
+  if (flowNodesForValidation.length === 0) {
+    return NextResponse.json({ error: "Cannot publish a flow with no nodes" }, { status: 400 });
+  }
+  const safetyErrors = validateFlowForPublication(
+    flowNodesForValidation,
+    flowEdgesForValidation,
+  );
+  if (safetyErrors.length > 0) {
+    return NextResponse.json(
+      { error: "Flow failed publication safety checks", details: safetyErrors },
+      { status: 400 },
+    );
+  }
 
   // Update flow status to published and increment version
   const newVersion = flow.version + 1;
@@ -96,8 +118,10 @@ export async function POST(
       if (type === "keyword" || type === "comment_keyword") {
         config.keywords = data.keywords ?? nodeConfig.keywords ?? [];
         if (nodeConfig.matchType) config.matchType = nodeConfig.matchType;
-        const postIds = data.postIds ?? nodeConfig.postIds;
-        if (Array.isArray(postIds) && postIds.length > 0) config.postIds = postIds;
+        const postScope = data.postScope === "specific" ? "specific" : "all";
+        config.postScope = postScope;
+        const postIds = normalizePostIds(data.postIds ?? nodeConfig.postIds);
+        if (postScope === "specific") config.postIds = postIds;
         const replyText = data.replyText ?? nodeConfig.replyText;
         if (typeof replyText === "string" && replyText.trim()) config.replyText = replyText;
       } else if (type === "postback" || type === "quick_reply") {

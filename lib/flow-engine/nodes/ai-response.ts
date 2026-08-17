@@ -3,6 +3,8 @@ import type { Database } from "@/lib/types/database";
 import type { FlowExecutionContext, AiResponseNodeData } from "../types";
 import { createZernioClient } from "@/lib/zernio-client";
 import { generateText, createGateway } from "ai";
+import { isStandardMessagingWindowOpen } from "@/lib/automation-safety";
+import { instagramOutboundRateLimiter } from "@/lib/instagram-rate-limit";
 
 // Halt the run: continuing would let a downstream Send Message deliver the
 // literal "{{ai_response}}" token to the contact (same pause mechanism as
@@ -71,6 +73,31 @@ export async function executeAiResponse(
       return cancelRun(supabase, sessionId);
     }
     lateConversationId = conversation.late_conversation_id;
+  }
+
+  if (data.sendDirectly !== false && context.platform === "instagram") {
+    const { data: contact } = await supabase
+      .from("contacts")
+      .select("is_subscribed, metadata")
+      .eq("id", context.contactId)
+      .single();
+    const metadata =
+      contact?.metadata && typeof contact.metadata === "object" && !Array.isArray(contact.metadata)
+        ? (contact.metadata as Record<string, unknown>)
+        : {};
+    const lastInbound =
+      typeof metadata.instagram_last_user_interaction_at === "string"
+        ? metadata.instagram_last_user_interaction_at
+        : undefined;
+    if (
+      !contact?.is_subscribed ||
+      !isStandardMessagingWindowOpen(lastInbound) ||
+      !lateAccountId ||
+      !instagramOutboundRateLimiter.reserve(lateAccountId, "direct_message")
+    ) {
+      console.warn("AI direct send suppressed by Instagram safety guard");
+      return cancelRun(supabase, sessionId);
+    }
   }
 
   // Fetch last N messages from the conversation for context

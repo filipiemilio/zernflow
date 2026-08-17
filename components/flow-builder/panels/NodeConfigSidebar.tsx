@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect } from "react";
-import { X, Trash2, Zap, MessageSquare, GitBranch, Clock, Cog, Sparkles } from "lucide-react";
+import { X, Trash2, Copy, Zap, MessageSquare, GitBranch, Clock, Cog, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Edge, Node } from "@xyflow/react";
 
@@ -18,6 +18,7 @@ interface NodeConfigSidebarProps {
   edges: Edge[];
   onChange: (nodeId: string, data: Record<string, unknown>) => void;
   onClose: () => void;
+  onDuplicate: (nodeId: string) => void;
   onDelete: (nodeId: string) => void;
 }
 
@@ -112,7 +113,15 @@ const nodeTypeConfig: Record<string, { label: string; icon: typeof Cog; color: s
   },
 };
 
-export function NodeConfigSidebar({ node, nodes, edges, onChange, onClose, onDelete }: NodeConfigSidebarProps) {
+export function NodeConfigSidebar({
+  node,
+  nodes,
+  edges,
+  onChange,
+  onClose,
+  onDuplicate,
+  onDelete,
+}: NodeConfigSidebarProps) {
   const nodeType = node.type || "action";
   const config = nodeTypeConfig[nodeType] || nodeTypeConfig.action;
   const Icon = config.icon;
@@ -175,7 +184,7 @@ export function NodeConfigSidebar({ node, nodes, edges, onChange, onClose, onDel
   return (
     <div
       className={cn(
-        "flex w-80 flex-col border-l bg-card",
+        "flex min-w-0 w-80 shrink-0 flex-col overflow-x-hidden border-l bg-card",
         config.borderColor
       )}
       style={{ borderLeftWidth: "3px" }}
@@ -194,6 +203,15 @@ export function NodeConfigSidebar({ node, nodes, edges, onChange, onClose, onDel
           </div>
         </div>
         <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => onDuplicate(node.id)}
+            className="rounded-lg p-1.5 text-muted-foreground/60 hover:bg-muted hover:text-foreground"
+            title="Duplicate configured node"
+            aria-label="Duplicate configured node"
+          >
+            <Copy className="h-4 w-4" />
+          </button>
           <button
             type="button"
             onClick={() => onDelete(node.id)}
@@ -227,7 +245,7 @@ export function NodeConfigSidebar({ node, nodes, edges, onChange, onClose, onDel
       </div>
 
       {/* Panel Content */}
-      <div className="flex-1 overflow-y-auto px-4 py-4">
+      <div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-4">
         {renderPanel()}
       </div>
 

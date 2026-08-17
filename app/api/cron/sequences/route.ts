@@ -4,13 +4,11 @@ import { processSequenceSteps } from "@/lib/sequence-processor";
 /**
  * Cron job handler that processes sequence enrollments.
  * Call via Vercel Cron or external cron every 30-60 seconds.
- * GET /api/cron/sequences?key=CRON_SECRET
+ * GET /api/cron/sequences with Authorization: Bearer <CRON_SECRET>
  */
 export async function GET(request: NextRequest) {
   const cronSecret = process.env.CRON_SECRET;
-  const providedSecret =
-    request.nextUrl.searchParams.get("key") ||
-    request.headers.get("authorization")?.replace("Bearer ", "");
+  const providedSecret = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
 
   if (!cronSecret || providedSecret !== cronSecret) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

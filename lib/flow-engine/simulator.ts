@@ -50,6 +50,7 @@ export interface SimulationConfig {
     tags?: string[];
     customFields?: Record<string, string>;
     isSubscribed?: boolean;
+    isFollower?: boolean;
   };
 }
 
@@ -143,7 +144,7 @@ export function simulateFlow(
     .filter((k) => k.length > 0);
   let triggerMatched = false;
 
-  if (triggerType === "keyword") {
+  if (triggerType === "keyword" || triggerType === "comment_keyword") {
     const msg = config.incomingMessage.toLowerCase();
     triggerMatched =
       keywords.length === 0 ||
@@ -198,12 +199,18 @@ export function simulateFlow(
 
     switch (node.type) {
       case "sendMessage": {
-        const messages = (data.messages as Array<{ type?: string; text?: string; imageUrl?: string }>) || [];
+        const messages = (data.messages as Array<{
+          type?: string;
+          text?: string;
+          imageUrl?: string;
+          buttons?: { title: string }[];
+          quickReplies?: { title: string }[];
+        }>) || [];
         const texts = messages
           .filter((m) => m.text)
           .map((m) => interpolate(m.text!, variables));
-        const buttons = (data.buttons as Array<{ title: string }>) || [];
-        const quickReplies = (data.quickReplies as Array<{ title: string }>) || [];
+        const buttons = messages.flatMap((m) => m.buttons || []);
+        const quickReplies = messages.flatMap((m) => m.quickReplies || []);
         steps.push({
           nodeId: node.id,
           nodeType: "sendMessage",
@@ -233,6 +240,10 @@ export function simulateFlow(
             fieldValue = "instagram"; // simulated
           } else if (c.field === "is_subscribed") {
             fieldValue = String(config.mockContact?.isSubscribed ?? true);
+          } else if (c.field === "instagram_follower") {
+            fieldValue = typeof config.mockContact?.isFollower === "boolean"
+              ? String(config.mockContact.isFollower)
+              : undefined;
           } else if (c.field.startsWith("tag:")) {
             const tagName = c.field.replace("tag:", "");
             fieldValue = String(
@@ -310,6 +321,16 @@ export function simulateFlow(
 
       case "action": {
         const actionType = (data.actionType as string) || "unknown";
+        if (actionType === "commentReply") {
+          const text = interpolate((data.text as string) || "", variables);
+          steps.push({
+            nodeId: node.id,
+            nodeType: "commentReply",
+            nodeLabel: label,
+            result: { type: "comment_reply", text },
+          });
+          break;
+        }
         const tagName = (data.tagName as string) || "";
         const fieldSlug = (data.fieldSlug as string) || "";
         const fieldValue = (data.value as string) || "";

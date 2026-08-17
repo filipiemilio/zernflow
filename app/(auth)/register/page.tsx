@@ -4,15 +4,14 @@ import { useState } from "react";
 import Image from "next/image";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 
 export default function RegisterPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [registrationSubmitted, setRegistrationSubmitted] = useState(false);
   const [loading, setLoading] = useState(false);
-  const router = useRouter();
   const supabase = createClient();
 
   async function handleSubmit(e: React.FormEvent) {
@@ -20,23 +19,21 @@ export default function RegisterPage() {
     setLoading(true);
     setError(null);
 
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        data: { full_name: name },
-        emailRedirectTo: `${window.location.origin}/auth/callback`,
-      },
+    const response = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, email, password }),
     });
+    const result = await response.json().catch(() => ({}));
 
-    if (error) {
-      setError(error.message);
+    if (!response.ok) {
+      setError(typeof result.error === "string" ? result.error : "Unable to create the account");
       setLoading(false);
       return;
     }
 
-    router.push("/dashboard");
-    router.refresh();
+    setRegistrationSubmitted(true);
+    setLoading(false);
   }
 
   async function handleGitHubLogin() {
@@ -59,6 +56,18 @@ export default function RegisterPage() {
           </p>
         </div>
 
+        {registrationSubmitted ? (
+          <div className="space-y-4 rounded-lg border border-border p-5 text-center">
+            <h2 className="font-semibold">Check your email</h2>
+            <p className="text-sm text-muted-foreground">
+              We sent a confirmation link to your email address. Open it before signing in.
+            </p>
+            <Link href="/login" className="inline-block text-sm font-medium text-primary hover:underline">
+              Go to sign in
+            </Link>
+          </div>
+        ) : (
+          <>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label htmlFor="name" className="block text-sm font-medium mb-1.5">
@@ -106,9 +115,9 @@ export default function RegisterPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              minLength={6}
+              minLength={8}
               className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
-              placeholder="Min. 6 characters"
+              placeholder="Min. 8 characters"
             />
           </div>
 
@@ -152,6 +161,8 @@ export default function RegisterPage() {
             Sign in
           </Link>
         </p>
+          </>
+        )}
       </div>
     </div>
   );

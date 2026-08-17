@@ -19,7 +19,19 @@ import type {
 } from "./types";
 import { executeAiResponse } from "./nodes/ai-response";
 import { adaptMessage } from "./platform-adapter";
+import {
+  privateReplyInteractiveFields,
+  shouldSendCommentPrivateReply,
+} from "./private-reply";
+import { instagramOutboundRateLimiter } from "@/lib/instagram-rate-limit";
+import { resolveExecutableNodeType } from "./node-type";
 import { createZernioClient } from "@/lib/zernio-client";
+import { followerConditionValue } from "./follower-condition";
+import {
+  isPrivateReplyEligible,
+  isStandardMessagingWindowOpen,
+  validateOutboundHttpUrl,
+} from "@/lib/automation-safety";
 
 export async function executeFlow(
   supabase: SupabaseClient<Database>,
@@ -104,6 +116,15 @@ export async function executeFlow(
 
   if (!session) return;
 
+  // Session-bound payloads prevent an old or forged postback from selecting a
+  // different execution. Persist before the first message node interpolates
+  // button/quick-reply payloads.
+  context.variables.session_id = session.id;
+  await supabase
+    .from("flow_sessions")
+    .update({ variables: context.variables as Json })
+    .eq("id", session.id);
+
   // Track flow_started
   await supabase.from("analytics_events").insert({
     workspace_id: context.workspaceId,
@@ -138,6 +159,27 @@ export async function resumeSession(
   session: Database["public"]["Tables"]["flow_sessions"]["Row"],
   context: FlowExecutionContext
 ) {
+  // Smart-delay resumes are a one-shot compare-and-swap. Two rapid messages or
+  // duplicate webhook deliveries may both read the waiting row, but only one
+  // can clear waiting_for_input while it still points at the same node.
+  if (session.waiting_for_input) {
+    let claim = supabase
+      .from("flow_sessions")
+      .update({ waiting_for_input: false })
+      .eq("id", session.id)
+      .eq("status", "active")
+      .eq("waiting_for_input", true);
+    claim = session.current_node_id
+      ? claim.eq("current_node_id", session.current_node_id)
+      : claim.is("current_node_id", null);
+    const { data: claimed, error: claimError } = await claim.select("*").maybeSingle();
+    if (claimError) {
+      throw new FlowLoadError(`session ${session.id} input claim failed: ${claimError.message}`);
+    }
+    if (!claimed) return;
+    session = claimed;
+  }
+
   const { data: flow, error: flowError } = await supabase
     .from("flows")
     .select("*")
@@ -192,15 +234,25 @@ export async function resumeSession(
 
   context.variables = (session.variables as Record<string, string>) || {};
 
-  // The resume is driven by a fresh reply; make {{message}} reflect it.
+  // The resume is driven by a fresh reply; make {{message}} and follower
+  // conditions reflect the event that resumed the session. Persist the follower
+  // status because a following Delay node resumes later without the webhook body.
   if (context.incomingMessage.text) {
     context.variables.message = context.incomingMessage.text;
+  }
+  const resumedFollower = followerConditionValue(context.incomingMessage);
+  if (resumedFollower !== undefined) {
+    context.variables.instagram_follower = resumedFollower;
   }
 
   // Update session
   await supabase
     .from("flow_sessions")
-    .update({ waiting_for_input: false, waiting_until: null })
+    .update({
+      waiting_for_input: false,
+      waiting_until: null,
+      variables: context.variables as Json,
+    })
     .eq("id", session.id);
 
   // Continue from current node
@@ -285,17 +337,16 @@ async function traverseNodes(
   // Execute the node
   const result = await executeNode(supabase, node, context, sessionId);
 
-  // Persist variables written by output-producing nodes so they survive
-  // pauses (resumeSession reloads them from the session row).
-  if (node.type === "aiResponse" || node.type === "httpRequest") {
-    await supabase
-      .from("flow_sessions")
-      .update({ variables: (context.variables ?? {}) as Json })
-      .eq("id", sessionId);
-  }
+  // Persist variables after every node. Security state such as session-bound
+  // payload nonces and private_reply_sent must survive pauses and retries just
+  // like AI/HTTP outputs.
+  await supabase
+    .from("flow_sessions")
+    .update({ variables: (context.variables ?? {}) as Json })
+    .eq("id", sessionId);
 
-  // If the node pauses execution (delay, wait for input, human takeover), stop
-  if (result === "pause") return;
+  // If the node pauses or safely terminates execution, stop traversal.
+  if (result === "pause" || result === "stop") return;
 
   // Find next node(s)
   let nextEdge: FlowEdge | undefined;
@@ -331,9 +382,11 @@ async function executeNode(
   context: FlowExecutionContext,
   sessionId: string
 ): Promise<string | void> {
-  switch (node.type) {
+  const executableType = resolveExecutableNodeType(node);
+
+  switch (executableType) {
     case "sendMessage":
-      return executeSendMessage(supabase, node.data as SendMessageNodeData, context);
+      return executeSendMessage(supabase, node.data as SendMessageNodeData, context, sessionId);
     case "condition":
       return executeCondition(supabase, node.data as ConditionNodeData, context);
     case "delay":
@@ -351,11 +404,11 @@ async function executeNode(
       return executeHumanTakeover(supabase, context, sessionId);
     case "subscribe":
     case "unsubscribe":
-      return executeSubscription(supabase, node.type, context);
+      return executeSubscription(supabase, executableType, context);
     case "commentReply":
-      return executeCommentReply(supabase, node.data as CommentReplyNodeData, context);
+      return executeCommentReply(supabase, node.data as CommentReplyNodeData, context, sessionId);
     case "privateReply":
-      return executePrivateReply(supabase, node.data as PrivateReplyNodeData, context);
+      return executePrivateReply(supabase, node.data as PrivateReplyNodeData, context, sessionId);
     case "aiResponse":
       return executeAiResponse(supabase, node.data as AiResponseNodeData, context, sessionId);
     case "abSplit":
@@ -374,15 +427,71 @@ async function executeNode(
   }
 }
 
+interface ContactAutomationSafetyState {
+  subscribed: boolean;
+  instagramLastUserInteractionAt?: string;
+}
+
+async function getContactAutomationSafetyState(
+  supabase: SupabaseClient<Database>,
+  contactId: string,
+): Promise<ContactAutomationSafetyState | null> {
+  const { data: contact } = await supabase
+    .from("contacts")
+    .select("is_subscribed, metadata")
+    .eq("id", contactId)
+    .single();
+  if (!contact) return null;
+  const metadata =
+    contact.metadata && typeof contact.metadata === "object" && !Array.isArray(contact.metadata)
+      ? (contact.metadata as Record<string, unknown>)
+      : {};
+  return {
+    subscribed: contact.is_subscribed,
+    instagramLastUserInteractionAt:
+      typeof metadata.instagram_last_user_interaction_at === "string"
+        ? metadata.instagram_last_user_interaction_at
+        : undefined,
+  };
+}
+
+async function canSendPrivateReply(
+  supabase: SupabaseClient<Database>,
+  context: FlowExecutionContext,
+): Promise<boolean> {
+  const state = await getContactAutomationSafetyState(supabase, context.contactId);
+  if (!state?.subscribed) return false;
+  if (context.variables?.private_reply_sent === "true") return false;
+  return isPrivateReplyEligible(context.variables?.comment_created_at);
+}
+
+async function canSendStandardAutomation(
+  supabase: SupabaseClient<Database>,
+  context: FlowExecutionContext,
+): Promise<boolean> {
+  const state = await getContactAutomationSafetyState(supabase, context.contactId);
+  if (!state?.subscribed) return false;
+  if (context.platform !== "instagram") return true;
+  return isStandardMessagingWindowOpen(state.instagramLastUserInteractionAt);
+}
+
 async function sendFirstMessageAsPrivateReply(
   supabase: SupabaseClient<Database>,
   zernio: ReturnType<typeof createZernioClient>,
   data: SendMessageNodeData,
   context: FlowExecutionContext,
   lateAccountId: string
-) {
+): Promise<boolean> {
   const first = data.messages[0];
-  if (!first) return;
+  if (!first) return false;
+  if (!(await canSendPrivateReply(supabase, context))) {
+    console.warn("Blocked ineligible, duplicate, or unsubscribed Instagram private reply");
+    return false;
+  }
+  if (!instagramOutboundRateLimiter.reserve(lateAccountId, "private_reply")) {
+    console.warn("Blocked Instagram private reply: local rolling-hour limit reached");
+    return false;
+  }
 
   const text = interpolateVariables(
     adaptMessage(first, context.platform ?? "instagram").text,
@@ -390,13 +499,23 @@ async function sendFirstMessageAsPrivateReply(
   );
 
   try {
+    // The installed SDK predates Zernio's interactive private-reply fields, but
+    // the API accepts `buttons` and `quickReplies` on this endpoint. Keep the
+    // request in a variable so TypeScript structurally accepts the newer fields.
+    const body = {
+      accountId: lateAccountId,
+      message: text,
+      ...privateReplyInteractiveFields(first, context.variables || {}),
+    };
+
     await zernio.comments.sendPrivateReplyToComment({
       path: {
         postId: String(context.variables!.post_id),
         commentId: String(context.variables!.comment_id),
       },
-      body: { accountId: lateAccountId, message: text },
+      body,
     });
+    context.variables!.private_reply_sent = "true";
 
     await supabase.from("messages").insert({
       conversation_id: context.conversationId,
@@ -421,7 +540,7 @@ async function sendFirstMessageAsPrivateReply(
       sent_by_flow_id: context.flowId,
       status: "failed",
     });
-    return;
+    return false;
   }
 
   if (data.messages.length > 1) {
@@ -429,13 +548,28 @@ async function sendFirstMessageAsPrivateReply(
       "Comment flow Send Message node had multiple messages; only the first was sent (one private reply per comment)."
     );
   }
+  return true;
+}
+
+async function stopSessionForSafety(
+  supabase: SupabaseClient<Database>,
+  sessionId: string,
+  reason: string,
+) {
+  console.warn(`Flow session ${sessionId} stopped: ${reason}`);
+  await supabase
+    .from("flow_sessions")
+    .update({ status: "cancelled", waiting_for_input: false })
+    .eq("id", sessionId)
+    .eq("status", "active");
 }
 
 async function executeSendMessage(
   supabase: SupabaseClient<Database>,
   data: SendMessageNodeData,
-  context: FlowExecutionContext
-) {
+  context: FlowExecutionContext,
+  sessionId: string,
+): Promise<string | void> {
   // Get workspace for API key
   const { data: workspace } = await supabase
     .from("workspaces")
@@ -443,7 +577,10 @@ async function executeSendMessage(
     .eq("id", context.workspaceId)
     .single();
 
-  if (!workspace?.late_api_key_encrypted) return;
+  if (!workspace?.late_api_key_encrypted) {
+    await stopSessionForSafety(supabase, sessionId, "workspace API key missing");
+    return "stop";
+  }
 
   const zernio = createZernioClient(workspace.late_api_key_encrypted);
 
@@ -456,15 +593,43 @@ async function executeSendMessage(
       .eq("id", context.channelId)
       .single();
 
-    if (!channel) return;
+    if (!channel) {
+      await stopSessionForSafety(supabase, sessionId, "channel missing");
+      return "stop";
+    }
     lateAccountId = channel.late_account_id;
     if (!context.platform) {
       context.platform = channel.platform as FlowExecutionContext["platform"];
     }
   }
 
-  // Resolve late_conversation_id from conversation if not in context
+  // A comment starts a new messaging opportunity even when this contact has an
+  // older DM conversation. Always use the one permitted private reply for the
+  // first node of this comment session; the existing conversation is only used
+  // after the contact interacts with that reply.
   let lateConversationId = context.lateConversationId;
+  if (
+    lateAccountId &&
+    shouldSendCommentPrivateReply(
+      context.variables,
+      Boolean(lateConversationId),
+    )
+  ) {
+    const sent = await sendFirstMessageAsPrivateReply(
+      supabase,
+      zernio,
+      data,
+      context,
+      lateAccountId,
+    );
+    if (!sent) {
+      await stopSessionForSafety(supabase, sessionId, "private reply was not eligible or failed");
+      return "stop";
+    }
+    return;
+  }
+
+  // Resolve late_conversation_id from conversation if not in context
   if (!lateConversationId) {
     const { data: conversation } = await supabase
       .from("conversations")
@@ -473,21 +638,34 @@ async function executeSendMessage(
       .single();
 
     if (!conversation?.late_conversation_id) {
-      // Comment-triggered flows have no DM conversation yet. Instagram allows
-      // exactly one private reply per comment, so deliver the first message via
-      // the private-reply endpoint instead of silently dropping the whole node
-      // (users build comment flows with plain Send Message nodes, not Private Reply).
-      if (context.variables?.comment_id && context.variables?.post_id && lateAccountId) {
-        await sendFirstMessageAsPrivateReply(supabase, zernio, data, context, lateAccountId);
-        return;
-      }
-      console.error("No late_conversation_id found for conversation:", context.conversationId);
-      return;
+      await stopSessionForSafety(supabase, sessionId, "conversation id missing");
+      return "stop";
     }
     lateConversationId = conversation.late_conversation_id;
   }
 
+  if (!lateAccountId) {
+    await stopSessionForSafety(supabase, sessionId, "platform account id missing");
+    return "stop";
+  }
+
+  if (!(await canSendStandardAutomation(supabase, context))) {
+    await stopSessionForSafety(
+      supabase,
+      sessionId,
+      "Instagram 24h messaging window closed or contact opted out",
+    );
+    return "stop";
+  }
+
   for (const msg of data.messages) {
+    if (
+      context.platform === "instagram" &&
+      !instagramOutboundRateLimiter.reserve(lateAccountId, "direct_message")
+    ) {
+      await stopSessionForSafety(supabase, sessionId, "Instagram direct-message burst limit reached");
+      return "stop";
+    }
     const adapted = adaptMessage(msg, context.platform!);
     const text = interpolateVariables(adapted.text, context.variables || {});
 
@@ -516,10 +694,21 @@ async function executeSendMessage(
       }
 
       if (adapted.buttons?.length) {
-        body.buttons = adapted.buttons;
+        body.buttons = adapted.buttons.map((button) => ({
+          ...button,
+          payload: button.payload
+            ? interpolateVariables(button.payload, context.variables || {})
+            : undefined,
+          url: button.url
+            ? interpolateVariables(button.url, context.variables || {})
+            : undefined,
+        }));
       }
       if (adapted.quickReplies?.length) {
-        body.quickReplies = adapted.quickReplies;
+        body.quickReplies = adapted.quickReplies.map((reply) => ({
+          ...reply,
+          payload: interpolateVariables(reply.payload, context.variables || {}),
+        }));
       }
       if (adapted.template) {
         body.template = adapted.template;
@@ -568,6 +757,8 @@ async function executeSendMessage(
         event_type: "message_failed",
         metadata: { error: error instanceof Error ? error.message : "Unknown error" },
       });
+      await stopSessionForSafety(supabase, sessionId, "outbound API send failed");
+      return "stop";
     }
 
     // Small delay between messages
@@ -577,11 +768,64 @@ async function executeSendMessage(
   }
 }
 
+async function fetchLiveInstagramFollowerStatus(
+  supabase: SupabaseClient<Database>,
+  context: FlowExecutionContext,
+): Promise<boolean | undefined> {
+  if (
+    context.platform !== "instagram" ||
+    !context.lateConversationId ||
+    !context.lateAccountId
+  ) {
+    return undefined;
+  }
+
+  try {
+    const { data: workspace } = await supabase
+      .from("workspaces")
+      .select("late_api_key_encrypted")
+      .eq("id", context.workspaceId)
+      .single();
+    if (!workspace?.late_api_key_encrypted) return undefined;
+
+    const zernio = createZernioClient(workspace.late_api_key_encrypted);
+    const response = await zernio.messages.getInboxConversation({
+      path: { conversationId: context.lateConversationId },
+      query: { accountId: context.lateAccountId },
+    });
+    const responseData = response.data as
+      | {
+          data?: { instagramProfile?: { isFollower?: boolean | null } | null };
+          instagramProfile?: { isFollower?: boolean | null } | null;
+        }
+      | undefined;
+    const conversation = responseData?.data ?? responseData;
+    const liveValue = conversation?.instagramProfile?.isFollower;
+    return typeof liveValue === "boolean" ? liveValue : undefined;
+  } catch (error) {
+    console.warn(
+      "Live Instagram follower lookup failed; using webhook/session fallback",
+      error,
+    );
+    return undefined;
+  }
+}
+
 async function executeCondition(
   supabase: SupabaseClient<Database>,
   data: ConditionNodeData,
   context: FlowExecutionContext
 ): Promise<string> {
+  const needsInstagramFollower = data.conditions.some(
+    (condition) => condition.field === "instagram_follower",
+  );
+  const liveInstagramFollower = needsInstagramFollower
+    ? await fetchLiveInstagramFollowerStatus(supabase, context)
+    : undefined;
+  if (typeof liveInstagramFollower === "boolean" && context.variables) {
+    context.variables.instagram_follower = String(liveInstagramFollower);
+  }
+
   const { data: contact } = await supabase
     .from("contacts")
     .select("*, contact_tags(tag_id, tags(name)), contact_custom_fields(field_id, value, custom_field_definitions(slug))")
@@ -593,8 +837,15 @@ async function executeCondition(
   const results = data.conditions.map((condition) => {
     let fieldValue: string | undefined;
 
-    // Check built-in fields
-    if (condition.field === "platform") {
+    // Instagram follower status is read from the current inbound message,
+    // not from a cached contact field. Missing profile data fails closed.
+    if (condition.field === "instagram_follower") {
+      fieldValue = followerConditionValue(
+        context.incomingMessage,
+        context.variables?.instagram_follower,
+        liveInstagramFollower,
+      );
+    } else if (condition.field === "platform") {
       fieldValue = context.platform;
     } else if (condition.field === "is_subscribed") {
       fieldValue = String(contact.is_subscribed);
@@ -762,7 +1013,8 @@ async function executeHttpRequest(
   context: FlowExecutionContext
 ) {
   try {
-    const url = interpolateVariables(data.url, context.variables || {});
+    const renderedUrl = interpolateVariables(data.url, context.variables || {});
+    const url = validateOutboundHttpUrl(renderedUrl);
     const body = data.body
       ? interpolateVariables(data.body, context.variables || {})
       : undefined;
@@ -774,9 +1026,18 @@ async function executeHttpRequest(
         ...data.headers,
       },
       body: data.method !== "GET" ? body : undefined,
+      redirect: "error",
+      signal: AbortSignal.timeout(10_000),
     });
 
+    const declaredLength = Number(response.headers.get("content-length") || 0);
+    if (declaredLength > 1_000_000) {
+      throw new Error("HTTP response exceeds 1 MB safety limit");
+    }
     const responseData = await response.text();
+    if (responseData.length > 1_000_000) {
+      throw new Error("HTTP response exceeds 1 MB safety limit");
+    }
 
     // Store response in variable if configured
     if (data.responseVariable && context.variables) {
@@ -863,8 +1124,9 @@ function executeABSplit(data: ABSplitNodeData): string {
 async function executeCommentReply(
   supabase: SupabaseClient<Database>,
   data: CommentReplyNodeData,
-  context: FlowExecutionContext
-) {
+  context: FlowExecutionContext,
+  sessionId: string,
+): Promise<string | void> {
   const { data: workspace } = await supabase
     .from("workspaces")
     .select("late_api_key_encrypted")
@@ -898,6 +1160,13 @@ async function executeCommentReply(
   }
 
   const text = interpolateVariables(data.text, context.variables || {});
+  if (
+    !lateAccountId ||
+    !instagramOutboundRateLimiter.reserve(lateAccountId, "public_reply")
+  ) {
+    await stopSessionForSafety(supabase, sessionId, "Instagram public-reply limit reached");
+    return "stop";
+  }
 
   try {
     await zernio.comments.replyToInboxPost({
@@ -906,6 +1175,8 @@ async function executeCommentReply(
     });
   } catch (error) {
     console.error("Failed to post comment reply:", error);
+    await stopSessionForSafety(supabase, sessionId, "public comment reply failed");
+    return "stop";
   }
 }
 
@@ -916,8 +1187,9 @@ async function executeCommentReply(
 async function executePrivateReply(
   supabase: SupabaseClient<Database>,
   data: PrivateReplyNodeData,
-  context: FlowExecutionContext
-) {
+  context: FlowExecutionContext,
+  sessionId: string,
+): Promise<string | void> {
   const { data: workspace } = await supabase
     .from("workspaces")
     .select("late_api_key_encrypted")
@@ -951,12 +1223,28 @@ async function executePrivateReply(
   }
 
   const text = interpolateVariables(data.text, context.variables || {});
+  if (!(await canSendPrivateReply(supabase, context))) {
+    await stopSessionForSafety(
+      supabase,
+      sessionId,
+      "private reply ineligible, duplicate, expired, or contact opted out",
+    );
+    return "stop";
+  }
+  if (
+    !lateAccountId ||
+    !instagramOutboundRateLimiter.reserve(lateAccountId, "private_reply")
+  ) {
+    await stopSessionForSafety(supabase, sessionId, "Instagram private-reply limit reached");
+    return "stop";
+  }
 
   try {
     await zernio.comments.sendPrivateReplyToComment({
       path: { postId, commentId },
       body: { accountId: lateAccountId, message: text },
     });
+    context.variables!.private_reply_sent = "true";
 
     await supabase.from("messages").insert({
       conversation_id: context.conversationId,
@@ -977,6 +1265,8 @@ async function executePrivateReply(
       sent_by_flow_id: context.flowId,
       status: "failed",
     });
+    await stopSessionForSafety(supabase, sessionId, "private reply API send failed");
+    return "stop";
   }
 }
 

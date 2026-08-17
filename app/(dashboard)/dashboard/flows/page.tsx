@@ -14,7 +14,7 @@ const statusConfig: Record<FlowStatus, { label: string; classes: string }> = {
   published: {
     label: "Published",
     classes:
-      "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400",
+      "bg-emerald-600 text-white dark:bg-emerald-500 dark:text-emerald-950",
   },
   archived: {
     label: "Archived",

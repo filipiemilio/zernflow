@@ -1,6 +1,8 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { createZernioClient } from "@/lib/zernio-client";
 import type { SequenceStep } from "@/lib/types/database";
+import { isStandardMessagingWindowOpen } from "@/lib/automation-safety";
+import { instagramOutboundRateLimiter } from "@/lib/instagram-rate-limit";
 
 /**
  * Process all sequence enrollments that are due.
@@ -49,6 +51,7 @@ async function processEnrollment(
     contact_id: string;
     channel_id: string;
     current_step_index: number;
+    next_step_at: string | null;
     sequences: {
       id: string;
       workspace_id: string;
@@ -84,14 +87,35 @@ async function processEnrollment(
 
   const currentStep = steps[stepIndex];
 
+  // Claim this exact due step before any send. Overlapping cron invocations
+  // cannot both replace the same non-null next_step_at with null.
+  if (!enrollment.next_step_at) return;
+  const { data: claimed } = await supabase
+    .from("sequence_enrollments")
+    .update({ next_step_at: null })
+    .eq("id", enrollment.id)
+    .eq("status", "active")
+    .eq("current_step_index", stepIndex)
+    .eq("next_step_at", enrollment.next_step_at)
+    .select("id")
+    .maybeSingle();
+  if (!claimed) return;
+
   if (currentStep.type === "message") {
-    await sendSequenceMessage(
+    const sent = await sendSequenceMessage(
       supabase,
       sequence.workspace_id,
       enrollment.contact_id,
       enrollment.channel_id,
       currentStep.content || ""
     );
+    if (!sent) {
+      await supabase
+        .from("sequence_enrollments")
+        .update({ status: "cancelled", next_step_at: null })
+        .eq("id", enrollment.id);
+      return;
+    }
   }
   // Delay steps don't need action; they just waited until next_step_at
 
@@ -140,7 +164,7 @@ async function sendSequenceMessage(
   contactId: string,
   channelId: string,
   text: string
-) {
+): Promise<boolean> {
   // Get workspace API key
   const { data: workspace } = await supabase
     .from("workspaces")
@@ -150,7 +174,7 @@ async function sendSequenceMessage(
 
   if (!workspace?.late_api_key_encrypted) {
     console.error("No Zernio API key for workspace:", workspaceId);
-    return;
+    return false;
   }
 
   const zernio = createZernioClient(workspace.late_api_key_encrypted);
@@ -158,13 +182,34 @@ async function sendSequenceMessage(
   // Get channel's late_account_id
   const { data: channel } = await supabase
     .from("channels")
-    .select("late_account_id")
+    .select("late_account_id, platform")
     .eq("id", channelId)
     .single();
 
   if (!channel?.late_account_id) {
     console.error("No late_account_id for channel:", channelId);
-    return;
+    return false;
+  }
+
+  const { data: contact } = await supabase
+    .from("contacts")
+    .select("is_subscribed, metadata")
+    .eq("id", contactId)
+    .single();
+  const metadata =
+    contact?.metadata && typeof contact.metadata === "object" && !Array.isArray(contact.metadata)
+      ? (contact.metadata as Record<string, unknown>)
+      : {};
+  const lastInbound =
+    typeof metadata.instagram_last_user_interaction_at === "string"
+      ? metadata.instagram_last_user_interaction_at
+      : undefined;
+  if (
+    !contact?.is_subscribed ||
+    (channel.platform === "instagram" && !isStandardMessagingWindowOpen(lastInbound))
+  ) {
+    console.warn("Sequence message suppressed by opt-out or Instagram 24h window");
+    return false;
   }
 
   // Get conversation for this contact + channel
@@ -182,10 +227,17 @@ async function sendSequenceMessage(
       "channel:",
       channelId
     );
-    return;
+    return false;
   }
 
   try {
+    if (
+      channel.platform === "instagram" &&
+      !instagramOutboundRateLimiter.reserve(channel.late_account_id, "direct_message")
+    ) {
+      console.warn("Sequence message suppressed by Instagram burst limit");
+      return false;
+    }
     const response = await zernio.messages.sendInboxMessage({
       path: { conversationId: conversation.late_conversation_id },
       body: { accountId: channel.late_account_id, message: text },
@@ -199,6 +251,7 @@ async function sendSequenceMessage(
       status: "sent",
       platform_message_id: response.data?.data?.messageId || null,
     });
+    return true;
   } catch (err) {
     console.error("Failed to send sequence message:", err);
 
@@ -209,5 +262,6 @@ async function sendSequenceMessage(
       text,
       status: "failed",
     });
+    return false;
   }
 }

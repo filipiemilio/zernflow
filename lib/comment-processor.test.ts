@@ -52,6 +52,15 @@ describe("matchCommentTrigger", () => {
     expect(matchCommentTrigger([t], comment("promo", "post-9"))?.id).toBe("t1");
   });
 
+  it("does not match when specific-post mode has no selected posts", () => {
+    const t = trigger("t1", {
+      keywords: [{ value: "promo" }],
+      postScope: "specific",
+      postIds: [],
+    });
+    expect(matchCommentTrigger([t], comment("promo", "post-1"))).toBeNull();
+  });
+
   it("skips triggers without keywords and returns null when nothing matches", () => {
     const empty = trigger("t1", {});
     const other = trigger("t2", { keywords: [{ value: "xyz" }] });

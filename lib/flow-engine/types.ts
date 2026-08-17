@@ -170,7 +170,16 @@ export interface FlowExecutionContext {
     postbackPayload?: string;
     quickReplyPayload?: string;
     callbackData?: string;
-    sender?: { id: string; name?: string; username?: string };
+    sender?: {
+      id: string;
+      name?: string;
+      username?: string;
+      instagramProfile?: {
+        isFollower?: boolean | null;
+        isFollowing?: boolean | null;
+        fetchedAt?: string;
+      } | null;
+    };
   };
   variables?: Record<string, string>;
   platform?: Platform;

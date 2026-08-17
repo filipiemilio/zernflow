@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Json } from "@/lib/types/database";
 import { executeFlow } from "@/lib/flow-engine/engine";
 import { createZernioClient } from "@/lib/zernio-client";
+import { instagramOutboundRateLimiter } from "@/lib/instagram-rate-limit";
 
 type Channel = Database["public"]["Tables"]["channels"]["Row"];
 type Trigger = Database["public"]["Tables"]["triggers"]["Row"];
@@ -10,6 +11,9 @@ export interface IncomingComment {
   id: string;
   postId: string;
   text: string;
+  createdAt?: string;
+  isReply?: boolean;
+  parentCommentId?: string | null;
   author: { id?: string; name?: string; username?: string };
 }
 
@@ -21,6 +25,7 @@ interface CommentKeywordConfig {
     matchType?: "exact" | "contains" | "startsWith";
   }>;
   postIds?: string[];
+  postScope?: "all" | "specific";
   replyText?: string;
 }
 
@@ -39,6 +44,7 @@ export function matchCommentTrigger(
   for (const trigger of triggers) {
     const config = trigger.config as unknown as CommentKeywordConfig;
     if (!config.keywords?.length) continue;
+    if (config.postScope === "specific" && !config.postIds?.length) continue;
     if (config.postIds?.length && !config.postIds.includes(comment.postId)) continue;
 
     for (const kw of config.keywords) {
@@ -74,7 +80,7 @@ export async function getActiveCommentTriggers(
 
 export interface ProcessCommentResult {
   matched: boolean;
-  skipped?: "already_processed";
+  skipped?: "already_processed" | "reply_comment";
   triggerId?: string;
   error?: string;
 }
@@ -95,14 +101,32 @@ export async function processComment({
   channel: Channel;
   comment: IncomingComment;
 }): Promise<ProcessCommentResult> {
-  const { data: alreadyLogged } = await supabase
-    .from("comment_logs")
-    .select("id")
-    .eq("channel_id", channel.id)
-    .eq("platform_comment_id", comment.id)
-    .maybeSingle();
+  // Public replies created by this or another automation must never recursively
+  // trigger comment automations. Top-level comments are the only supported entry.
+  if (comment.isReply) return { matched: false, skipped: "reply_comment" };
 
-  if (alreadyLogged) return { matched: false, skipped: "already_processed" };
+  // Atomically claim the comment before any public/private API call. A prior
+  // SELECT followed by a later UPSERT allowed concurrent deliveries with
+  // different event IDs to both send before the unique index converged.
+  const { error: claimError } = await supabase.from("comment_logs").insert({
+    channel_id: channel.id,
+    workspace_id: channel.workspace_id,
+    post_id: comment.postId,
+    platform_comment_id: comment.id,
+    author_id: comment.author.id || null,
+    author_name: comment.author.name || null,
+    author_username: comment.author.username || null,
+    comment_text: comment.text,
+    dm_sent: false,
+    reply_sent: false,
+  });
+  if (claimError?.code === "23505") {
+    return { matched: false, skipped: "already_processed" };
+  }
+  if (claimError) {
+    // Fail closed: without a durable claim, retries could multiply sends.
+    return { matched: false, error: `Failed to claim comment: ${claimError.message}` };
+  }
 
   const triggers = await getActiveCommentTriggers(supabase, {
     channelId: channel.id,
@@ -167,6 +191,22 @@ export async function processComment({
       });
     }
 
+    const { data: subscription } = await supabase
+      .from("contacts")
+      .select("is_subscribed")
+      .eq("id", contactId)
+      .single();
+    if (!subscription?.is_subscribed) {
+      await logComment({
+        supabase,
+        channel,
+        comment,
+        triggerId: matchedTrigger.id,
+        error: "Contact opted out; automation suppressed",
+      });
+      return { matched: true, triggerId: matchedTrigger.id, error: "Contact opted out" };
+    }
+
     let replySent = false;
     if (config.replyText) {
       const { data: workspace } = await supabase
@@ -177,6 +217,12 @@ export async function processComment({
 
       if (workspace?.late_api_key_encrypted) {
         try {
+          if (
+            !channel.late_account_id ||
+            !instagramOutboundRateLimiter.reserve(channel.late_account_id, "public_reply")
+          ) {
+            throw new Error("Instagram public-reply rate limit reached or account id missing");
+          }
           const zernio = createZernioClient(workspace.late_api_key_encrypted);
           await zernio.comments.replyToInboxPost({
             path: { postId: comment.postId },
@@ -216,6 +262,13 @@ export async function processComment({
     let dmSent = false;
     if (conversation) {
       try {
+        const variables: Record<string, string> = {
+          comment_id: comment.id,
+          comment_text: comment.text,
+          comment_created_at: comment.createdAt || "",
+          commenter_name: senderName,
+          post_id: comment.postId,
+        };
         await executeFlow(supabase, {
           triggerId: matchedTrigger.id,
           flowId: matchedTrigger.flow_id,
@@ -232,14 +285,9 @@ export async function processComment({
               username: comment.author.username,
             },
           },
-          variables: {
-            comment_id: comment.id,
-            comment_text: comment.text,
-            commenter_name: senderName,
-            post_id: comment.postId,
-          },
+          variables,
         });
-        dmSent = true;
+        dmSent = variables.private_reply_sent === "true";
       } catch (err) {
         console.error("Failed to execute comment flow:", err);
       }
