@@ -39,7 +39,10 @@ interface TriggerConfig {
     matchType?: "exact" | "contains" | "startsWith";
   }>;
   postIds?: string[];
+  /** Legacy single public reply, retained when loading older rules. */
   replyText?: string;
+  /** Unlimited public-reply variations; one is selected per matching comment. */
+  replyTexts?: string[];
 }
 
 const platformLabels: Record<Platform, string> = {
@@ -90,7 +93,7 @@ export function GrowthView({
     flowId: flows[0]?.id || "",
     keywords: "",
     matchType: "contains" as "exact" | "contains" | "startsWith",
-    replyText: "",
+    replyTexts: ["", "", ""],
     postIds: "",
   });
   const [creating, setCreating] = useState(false);
@@ -150,9 +153,10 @@ export function GrowthView({
       .filter(Boolean)
       .map((value) => ({ value, matchType: form.matchType }));
 
+    const replyTexts = form.replyTexts.map((text) => text.trim()).filter(Boolean);
     const config: TriggerConfig = {
       keywords,
-      ...(form.replyText.trim() ? { replyText: form.replyText.trim() } : {}),
+      ...(replyTexts.length > 0 ? { replyTexts } : {}),
       ...(form.postIds.trim()
         ? {
             postIds: form.postIds
@@ -190,7 +194,7 @@ export function GrowthView({
           flowId: flows[0]?.id || "",
           keywords: "",
           matchType: "contains",
-          replyText: "",
+          replyTexts: ["", "", ""],
           postIds: "",
         });
       }
@@ -210,7 +214,8 @@ export function GrowthView({
       flowId: trigger.flow_id,
       keywords: (config.keywords || []).map((k) => k.value).join(", "),
       matchType: config.keywords?.[0]?.matchType || "contains",
-      replyText: config.replyText || "",
+      replyTexts:
+        config.replyTexts?.length ? config.replyTexts : config.replyText ? [config.replyText] : ["", "", ""],
       postIds: (config.postIds || []).join(", "),
     });
   }
@@ -229,9 +234,10 @@ export function GrowthView({
       .filter(Boolean)
       .map((value) => ({ value, matchType: form.matchType }));
 
+    const replyTexts = form.replyTexts.map((text) => text.trim()).filter(Boolean);
     const config: TriggerConfig = {
       keywords,
-      ...(form.replyText.trim() ? { replyText: form.replyText.trim() } : {}),
+      ...(replyTexts.length > 0 ? { replyTexts } : {}),
       ...(form.postIds.trim()
         ? {
             postIds: form.postIds
@@ -268,7 +274,7 @@ export function GrowthView({
           flowId: flows[0]?.id || "",
           keywords: "",
           matchType: "contains",
-          replyText: "",
+          replyTexts: ["", "", ""],
           postIds: "",
         });
       }
@@ -287,7 +293,7 @@ export function GrowthView({
       flowId: flows[0]?.id || "",
       keywords: "",
       matchType: "contains",
-      replyText: "",
+      replyTexts: ["", "", ""],
       postIds: "",
     });
   }
@@ -442,23 +448,59 @@ export function GrowthView({
                 </select>
               </div>
 
-              {/* Public reply text (optional) */}
+              {/* Public reply variations (optional) */}
               <div className="sm:col-span-2">
-                <label className="text-xs font-medium text-muted-foreground">
-                  Public Reply (optional)
-                </label>
-                <input
-                  type="text"
-                  value={form.replyText}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, replyText: e.target.value }))
-                  }
-                  placeholder="Check your DMs! We just sent you more info."
-                  className="mt-1.5 w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary"
-                />
+                <div className="flex items-center justify-between gap-3">
+                  <label className="text-xs font-medium text-muted-foreground">
+                    Respostas públicas ao comentário (opcional)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setForm((f) => ({ ...f, replyTexts: [...f.replyTexts, ""] }))
+                    }
+                    className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Adicionar variação
+                  </button>
+                </div>
+                <div className="mt-1.5 space-y-2">
+                  {form.replyTexts.map((replyText, index) => (
+                    <div key={index} className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={replyText}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            replyTexts: f.replyTexts.map((text, position) =>
+                              position === index ? e.target.value : text,
+                            ),
+                          }))
+                        }
+                        placeholder={`Variação ${index + 1}: Confira suas DMs!`}
+                        className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setForm((f) => ({
+                            ...f,
+                            replyTexts: f.replyTexts.filter((_, position) => position !== index),
+                          }))
+                        }
+                        className="rounded-md p-2 text-muted-foreground hover:bg-muted hover:text-destructive"
+                        aria-label={`Remover variação ${index + 1}`}
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
                 <p className="mt-1 text-[11px] text-muted-foreground/60">
-                  If set, this will be posted as a public reply to the matching
-                  comment before sending the DM.
+                  Uma variação é sorteada para cada comentário. Adicione quantas quiser;
+                  campos vazios não são salvos.
                 </p>
               </div>
 
@@ -639,10 +681,10 @@ export function GrowthView({
                           </span>
                         </p>
 
-                        {/* Reply text preview */}
-                        {config.replyText && (
+                        {/* Public reply variation preview */}
+                        {(config.replyTexts?.length || config.replyText) && (
                           <p className="mt-1 text-xs text-muted-foreground/60">
-                            Public reply: &ldquo;{config.replyText}&rdquo;
+                            {config.replyTexts?.length || 1} {((config.replyTexts?.length || 1) === 1) ? "variação" : "variações"}
                           </p>
                         )}
 

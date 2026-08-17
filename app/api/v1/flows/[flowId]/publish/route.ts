@@ -122,8 +122,17 @@ export async function POST(
         config.postScope = postScope;
         const postIds = normalizePostIds(data.postIds ?? nodeConfig.postIds);
         if (postScope === "specific") config.postIds = postIds;
+        const replyTexts = data.replyTexts ?? nodeConfig.replyTexts;
+        if (Array.isArray(replyTexts)) {
+          const normalizedReplyTexts = replyTexts
+            .filter((text): text is string => typeof text === "string" && text.trim().length > 0)
+            .map((text) => text.trim());
+          if (normalizedReplyTexts.length > 0) config.replyTexts = normalizedReplyTexts;
+        }
         const replyText = data.replyText ?? nodeConfig.replyText;
-        if (typeof replyText === "string" && replyText.trim()) config.replyText = replyText;
+        if (typeof replyText === "string" && replyText.trim() && !config.replyTexts) {
+          config.replyText = replyText.trim();
+        }
       } else if (type === "postback" || type === "quick_reply") {
         const payload = data.payload ?? nodeConfig.payload;
         if (payload !== undefined) config.payload = payload;

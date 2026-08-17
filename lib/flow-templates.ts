@@ -151,13 +151,19 @@ export function instagramFollowerGateTemplate(): InstagramFollowerTemplate {
 }
 
 /**
- * Explicit opt-in follower gate based on the safe template's opening flow.
- * The first session-bound reply checks whether the user already follows. Only
- * non-followers are prompted to follow; their second session-bound reply is
- * checked again before the promised URL is delivered. A failed recheck ends
- * silently without sending the link.
+ * Explicit opt-in Instagram comment-to-DM follower gate.
+ *
+ * A non-follower first receives only the profile link. A later, session-bound
+ * confirmation starts a delayed verification sequence: this absorbs follower
+ * status propagation delays from Instagram/Zernio while keeping the promised
+ * link gated on a positive live check.
  */
 export function instagramFollowerRequiredTemplate(): InstagramFollowerTemplate {
+  const verifiedFollowerCondition = {
+    ...followerCondition,
+    allowFollowerGatedContent: true,
+  };
+
   return {
     nodes: [
       {
@@ -165,9 +171,14 @@ export function instagramFollowerRequiredTemplate(): InstagramFollowerTemplate {
         type: "trigger",
         position: { x: 400, y: 0 },
         data: {
-          label: "Comment Keyword",
+          label: "Comentário com palavra-chave",
           triggerType: "comment_keyword",
           keywords: [{ value: "claude", matchType: "contains" }],
+          replyTexts: [
+            "Obrigado! Por favor, veja suas DMs.",
+            "Enviei uma mensagem — confira seu direct!",
+            "Que bom! Dá uma olhada nas suas DMs.",
+          ],
         },
       },
       {
@@ -175,19 +186,11 @@ export function instagramFollowerRequiredTemplate(): InstagramFollowerTemplate {
         type: "sendMessage",
         position: { x: 400, y: 160 },
         data: {
-          label: "Opening DM",
-          messages: [
-            {
-              text: "Oi! Posso enviar o link prometido? Toque abaixo para continuar 👇 Se estiver no computador, responda LINK.",
-              buttons: [
-                {
-                  type: "postback",
-                  title: "Quero receber",
-                  payload: "ZF_OPEN_{{session_id}}",
-                },
-              ],
-            },
-          ],
+          label: "Mensagem privada do comentário",
+          messages: [{
+            text: "Oi! Posso enviar o link prometido? Toque abaixo para continuar 👇 Se estiver no computador, responda LINK.",
+            buttons: [{ type: "postback", title: "Quero receber", payload: "ZF_OPEN_{{session_id}}" }],
+          }],
         },
       },
       {
@@ -207,54 +210,58 @@ export function instagramFollowerRequiredTemplate(): InstagramFollowerTemplate {
         id: "initial-follower-check",
         type: "condition",
         position: { x: 400, y: 500 },
-        data: {
-          label: "Já segue o perfil?",
-          ...followerCondition,
-        },
+        data: { label: "Já segue o perfil?", ...followerCondition },
       },
       {
         id: "initial-link-delivery",
         type: "sendMessage",
         position: { x: 100, y: 700 },
         data: {
-          label: "Já seguia → enviar link",
-          messages: [
-            {
-              text: "Obrigado por acompanhar o perfil! Aqui está o link prometido 🚀",
-              buttons: [promisedLink],
-            },
-          ],
+          label: "Já seguia → enviar links",
+          messages: [{
+            text: "Obrigado por acompanhar o perfil! Aqui estão os links prometidos 🚀",
+            buttons: [promisedLink],
+          }],
         },
       },
       {
-        id: "follow-prompt",
+        id: "follow-profile-prompt",
         type: "sendMessage",
         position: { x: 700, y: 700 },
         data: {
-          label: "Ainda não segue → pedir follow",
-          messages: [
-            {
-              text: "Antes de liberar o link, siga @filipi.emilio e depois toque em “Já segui” para eu verificar 👇",
-              buttons: [
-                {
-                  type: "url",
-                  title: "Seguir perfil",
-                  url: "https://www.instagram.com/filipi.emilio/",
-                },
-                {
-                  type: "postback",
-                  title: "Já segui",
-                  payload: "ZF_FOLLOWED_{{session_id}}",
-                },
-              ],
-            },
-          ],
+          label: "Abrir perfil para seguir",
+          messages: [{
+            text: "Para liberar o link, primeiro abra o perfil @filipi.emilio e siga. Em instantes vou te pedir a confirmação aqui.",
+            buttons: [{
+              type: "url",
+              title: "Abrir perfil @filipi.emilio",
+              url: "https://www.instagram.com/filipi.emilio/",
+            }],
+          }],
+        },
+      },
+      {
+        id: "follow-profile-delay",
+        type: "delay",
+        position: { x: 700, y: 880 },
+        data: { label: "Aguardar retorno do perfil", duration: 1, unit: "minutes" },
+      },
+      {
+        id: "follow-confirmation-prompt",
+        type: "sendMessage",
+        position: { x: 700, y: 1060 },
+        data: {
+          label: "Pedir confirmação de follow",
+          messages: [{
+            text: "Voltou? Se já seguiu @filipi.emilio, toque abaixo para eu confirmar e liberar os links.",
+            buttons: [{ type: "postback", title: "Já segui", payload: "ZF_FOLLOWED_{{session_id}}" }],
+          }],
         },
       },
       {
         id: "follow-wait",
         type: "action",
-        position: { x: 700, y: 880 },
+        position: { x: 700, y: 1240 },
         data: {
           label: "Aguardar botão “Já segui”",
           actionType: "smartDelay",
@@ -264,27 +271,71 @@ export function instagramFollowerRequiredTemplate(): InstagramFollowerTemplate {
         },
       },
       {
-        id: "follower-recheck",
-        type: "condition",
-        position: { x: 700, y: 1060 },
+        id: "follow-checking-feedback",
+        type: "sendMessage",
+        position: { x: 700, y: 1420 },
         data: {
-          label: "Verificar novamente se segue o perfil",
-          ...followerCondition,
-          allowFollowerGatedContent: true,
+          label: "Avisar que está verificando",
+          messages: [{ text: "Perfeito — estou confirmando seu follow. O Instagram pode levar alguns minutos para atualizar, então vou verificar automaticamente. ✅" }],
         },
+      },
+      {
+        id: "follower-recheck-before-first",
+        type: "delay",
+        position: { x: 700, y: 1600 },
+        data: { label: "Aguardar sincronização inicial", duration: 1, unit: "minutes" },
+      },
+      {
+        id: "follower-recheck-1",
+        type: "condition",
+        position: { x: 700, y: 1780 },
+        data: { label: "Confirmar follow — tentativa 1", ...verifiedFollowerCondition },
+      },
+      {
+        id: "follower-recheck-delay-1",
+        type: "delay",
+        position: { x: 1000, y: 1960 },
+        data: { label: "Aguardar nova sincronização", duration: 1, unit: "minutes" },
+      },
+      {
+        id: "follower-recheck-2",
+        type: "condition",
+        position: { x: 1000, y: 2140 },
+        data: { label: "Confirmar follow — tentativa 2", ...verifiedFollowerCondition },
+      },
+      {
+        id: "follower-recheck-delay-2",
+        type: "delay",
+        position: { x: 1000, y: 2320 },
+        data: { label: "Aguardar sincronização final", duration: 2, unit: "minutes" },
+      },
+      {
+        id: "follower-recheck-3",
+        type: "condition",
+        position: { x: 1000, y: 2500 },
+        data: { label: "Confirmar follow — tentativa 3", ...verifiedFollowerCondition },
       },
       {
         id: "required-link-delivery",
         type: "sendMessage",
-        position: { x: 450, y: 1240 },
+        position: { x: 400, y: 2680 },
         data: {
-          label: "Follow confirmado → enviar link",
-          messages: [
-            {
-              text: "Follow confirmado ✅ Aqui está o link prometido:",
-              buttons: [promisedLink],
-            },
-          ],
+          label: "Follow confirmado → enviar links",
+          messages: [{
+            text: "Follow confirmado ✅ Aqui estão os links prometidos:",
+            buttons: [promisedLink],
+          }],
+        },
+      },
+      {
+        id: "follower-not-confirmed",
+        type: "sendMessage",
+        position: { x: 1300, y: 2680 },
+        data: {
+          label: "Follow ainda não confirmado",
+          messages: [{
+            text: "Ainda não consegui confirmar o follow pelo Instagram. Se você acabou de seguir, pode haver um atraso de atualização; tente novamente mais tarde.",
+          }],
         },
       },
     ],
@@ -292,26 +343,22 @@ export function instagramFollowerRequiredTemplate(): InstagramFollowerTemplate {
       { id: "required-e1", source: "required-trigger", target: "required-opening" },
       { id: "required-e2", source: "required-opening", target: "required-opening-wait" },
       { id: "required-e3", source: "required-opening-wait", target: "initial-follower-check" },
-      {
-        id: "required-e4",
-        source: "initial-follower-check",
-        target: "initial-link-delivery",
-        sourceHandle: "true",
-      },
-      {
-        id: "required-e5",
-        source: "initial-follower-check",
-        target: "follow-prompt",
-        sourceHandle: "false",
-      },
-      { id: "required-e6", source: "follow-prompt", target: "follow-wait" },
-      { id: "required-e7", source: "follow-wait", target: "follower-recheck" },
-      {
-        id: "required-e8",
-        source: "follower-recheck",
-        target: "required-link-delivery",
-        sourceHandle: "true",
-      },
+      { id: "required-e4", source: "initial-follower-check", target: "initial-link-delivery", sourceHandle: "true" },
+      { id: "required-e5", source: "initial-follower-check", target: "follow-profile-prompt", sourceHandle: "false" },
+      { id: "required-e6", source: "follow-profile-prompt", target: "follow-profile-delay" },
+      { id: "required-e7", source: "follow-profile-delay", target: "follow-confirmation-prompt" },
+      { id: "required-e8", source: "follow-confirmation-prompt", target: "follow-wait" },
+      { id: "required-e9", source: "follow-wait", target: "follow-checking-feedback" },
+      { id: "required-e10", source: "follow-checking-feedback", target: "follower-recheck-before-first" },
+      { id: "required-e11", source: "follower-recheck-before-first", target: "follower-recheck-1" },
+      { id: "required-e12", source: "follower-recheck-1", target: "follower-recheck-delay-1", sourceHandle: "false" },
+      { id: "required-e13", source: "follower-recheck-delay-1", target: "follower-recheck-2" },
+      { id: "required-e14", source: "follower-recheck-1", target: "required-link-delivery", sourceHandle: "true" },
+      { id: "required-e15", source: "follower-recheck-2", target: "follower-recheck-delay-2", sourceHandle: "false" },
+      { id: "required-e16", source: "follower-recheck-delay-2", target: "follower-recheck-3" },
+      { id: "required-e17", source: "follower-recheck-2", target: "required-link-delivery", sourceHandle: "true" },
+      { id: "required-e18", source: "follower-recheck-3", target: "follower-not-confirmed", sourceHandle: "false" },
+      { id: "required-e19", source: "follower-recheck-3", target: "required-link-delivery", sourceHandle: "true" },
     ],
   };
 }

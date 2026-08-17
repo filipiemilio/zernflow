@@ -8,3 +8,10 @@ export function normalizeConditionHandle(
   if (handle === "no") return CONDITION_FALSE_HANDLE;
   return handle ?? undefined;
 }
+
+export function matchesConditionHandle(
+  edgeHandle: string | null | undefined,
+  resultHandle: string,
+): boolean {
+  return normalizeConditionHandle(edgeHandle) === resultHandle;
+}

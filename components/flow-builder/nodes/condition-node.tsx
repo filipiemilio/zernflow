@@ -3,6 +3,10 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { GitBranch } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  CONDITION_FALSE_HANDLE,
+  CONDITION_TRUE_HANDLE,
+} from "@/lib/flow-engine/condition-handle";
 
 export interface ConditionNodeProps {
   label?: string;
@@ -78,14 +82,14 @@ export function ConditionNode({ data, selected }: NodeProps) {
       <Handle
         type="source"
         position={Position.Bottom}
-        id="yes"
+        id={CONDITION_TRUE_HANDLE}
         style={{ left: "30%" }}
         className="!h-3 !w-3 !border-2 !border-emerald-500 !bg-white"
       />
       <Handle
         type="source"
         position={Position.Bottom}
-        id="no"
+        id={CONDITION_FALSE_HANDLE}
         style={{ left: "70%" }}
         className="!h-3 !w-3 !border-2 !border-red-500 !bg-white"
       />

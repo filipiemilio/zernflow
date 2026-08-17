@@ -3,6 +3,10 @@ import type { Database, Json } from "@/lib/types/database";
 import { executeFlow } from "@/lib/flow-engine/engine";
 import { createZernioClient } from "@/lib/zernio-client";
 import { instagramOutboundRateLimiter } from "@/lib/instagram-rate-limit";
+import {
+  selectCommentReplyVariation,
+  type CommentReplyConfig,
+} from "@/lib/comment-reply-variations";
 
 type Channel = Database["public"]["Tables"]["channels"]["Row"];
 type Trigger = Database["public"]["Tables"]["triggers"]["Row"];
@@ -19,14 +23,13 @@ export interface IncomingComment {
 
 export type CommentForMatching = Pick<IncomingComment, "postId"> & { text: string };
 
-interface CommentKeywordConfig {
+interface CommentKeywordConfig extends CommentReplyConfig {
   keywords?: Array<{
     value: string;
     matchType?: "exact" | "contains" | "startsWith";
   }>;
   postIds?: string[];
   postScope?: "all" | "specific";
-  replyText?: string;
 }
 
 /**
@@ -208,7 +211,8 @@ export async function processComment({
     }
 
     let replySent = false;
-    if (config.replyText) {
+    const publicReply = selectCommentReplyVariation(config);
+    if (publicReply) {
       const { data: workspace } = await supabase
         .from("workspaces")
         .select("late_api_key_encrypted")
@@ -228,7 +232,7 @@ export async function processComment({
             path: { postId: comment.postId },
             body: {
               accountId: channel.late_account_id,
-              message: config.replyText,
+              message: publicReply,
               commentId: comment.id,
             },
           });

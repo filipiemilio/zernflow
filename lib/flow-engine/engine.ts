@@ -27,6 +27,7 @@ import { instagramOutboundRateLimiter } from "@/lib/instagram-rate-limit";
 import { resolveExecutableNodeType } from "./node-type";
 import { createZernioClient } from "@/lib/zernio-client";
 import { followerConditionValue } from "./follower-condition";
+import { matchesConditionHandle } from "./condition-handle";
 import {
   isPrivateReplyEligible,
   isStandardMessagingWindowOpen,
@@ -355,7 +356,7 @@ async function traverseNodes(
     // Condition/split nodes specify which handle to follow
     const handle = result.replace("handle:", "");
     nextEdge = edges.find(
-      (e) => e.source === node.id && e.sourceHandle === handle
+      (e) => e.source === node.id && matchesConditionHandle(e.sourceHandle, handle)
     );
   } else {
     nextEdge = edges.find((e) => e.source === node.id);
