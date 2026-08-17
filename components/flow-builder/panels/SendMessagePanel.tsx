@@ -715,6 +715,8 @@ function CarouselCardEditor({
                     updateButton(i, { ...btn, title: e.target.value })
                   }
                   placeholder="Button label"
+                  maxLength={20}
+                  title="Instagram rejects button labels longer than 20 characters."
                   className="flex-1 rounded border border-border bg-card px-2 py-1 text-[11px] text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />
                 <button

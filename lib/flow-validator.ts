@@ -42,9 +42,10 @@ function overlongTitles(node: PublishNode): string[] {
   if (node.type !== "sendMessage") return [];
   const messages = Array.isArray(node.data?.messages) ? node.data.messages : [];
   const titles: string[] = [];
-  for (const message of messages) {
-    if (!message || typeof message !== "object") continue;
-    const record = message as Record<string, unknown>;
+
+  const collect = (container: unknown) => {
+    if (!container || typeof container !== "object") return;
+    const record = container as Record<string, unknown>;
     for (const key of ["buttons", "quickReplies"]) {
       const items = Array.isArray(record[key]) ? (record[key] as unknown[]) : [];
       for (const item of items) {
@@ -55,6 +56,15 @@ function overlongTitles(node: PublishNode): string[] {
         }
       }
     }
+  };
+
+  for (const message of messages) {
+    collect(message);
+    // Carousel elements carry their own button lists, subject to the same cap.
+    const elements = Array.isArray((message as Record<string, unknown>)?.elements)
+      ? ((message as Record<string, unknown>).elements as unknown[])
+      : [];
+    elements.forEach(collect);
   }
   return titles;
 }

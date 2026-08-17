@@ -50,6 +50,21 @@ describe("validateFlowForPublication", () => {
     expect(
       validateFlowForPublication([trigger, withLabels("Abrir perfil", "buttons")], []),
     ).toEqual([]);
+
+    const carousel = {
+      id: "m",
+      type: "sendMessage",
+      data: {
+        messages: [
+          {
+            elements: [
+              { title: "Card", buttons: [{ title: "Abrir perfil @filipi.emilio" }] },
+            ],
+          },
+        ],
+      },
+    };
+    expect(validateFlowForPublication([trigger, carousel], []).join(" ")).toContain("20");
   });
 
   it("rejects follower-gated URLs that are withheld on the false branch", () => {
