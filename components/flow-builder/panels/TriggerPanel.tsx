@@ -69,18 +69,11 @@ const triggerGroups: Array<{ name: string; types: typeof triggerTypes }> = [
   },
 ];
 
-const matchTypes: Array<{ value: "exact" | "contains" | "startsWith"; label: string }> = [
-  { value: "exact", label: "Exact match" },
-  { value: "contains", label: "Contains" },
-  { value: "startsWith", label: "Starts with" },
-];
-
 export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
   const data = rawData as TriggerPanelData;
   const triggerType = data.triggerType || "keyword";
   const keywords = data.keywords || [];
   const [newKeyword, setNewKeyword] = useState("");
-  const [newMatchType, setNewMatchType] = useState<"exact" | "contains" | "startsWith">("contains");
   const [postChannels, setPostChannels] = useState<PostSelectorChannel[]>([]);
   const [loadingPosts, setLoadingPosts] = useState(false);
   const [postsLoaded, setPostsLoaded] = useState(false);
@@ -192,24 +185,31 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
   );
 
   const addKeyword = useCallback(() => {
-    const trimmed = newKeyword.trim();
-    if (!trimmed) return;
-    const updated: Keyword[] = [...keywords, { value: trimmed, matchType: newMatchType }];
-    onChange({ ...data, keywords: updated });
+    // Commas split so a pasted "preço, link, comprar" lands as three keywords.
+    const candidates = newKeyword
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (candidates.length === 0) return;
+
+    // Both matchers lowercase the keyword and the incoming text, so a case
+    // variant of an existing keyword would never match anything new.
+    const seen = new Set(keywords.map((k) => k.value.toLowerCase()));
+    const added: Keyword[] = [];
+    for (const value of candidates) {
+      if (seen.has(value.toLowerCase())) continue;
+      seen.add(value.toLowerCase());
+      added.push({ value, matchType: "contains" });
+    }
+
     setNewKeyword("");
-  }, [data, keywords, newKeyword, newMatchType, onChange]);
+    if (added.length === 0) return;
+    onChange({ ...data, keywords: [...keywords, ...added] });
+  }, [data, keywords, newKeyword, onChange]);
 
   const removeKeyword = useCallback(
     (index: number) => {
       const updated = keywords.filter((_, i) => i !== index);
-      onChange({ ...data, keywords: updated });
-    },
-    [data, keywords, onChange]
-  );
-
-  const updateKeywordMatchType = useCallback(
-    (index: number, matchType: "exact" | "contains" | "startsWith") => {
-      const updated = keywords.map((k, i) => (i === index ? { ...k, matchType } : k));
       onChange({ ...data, keywords: updated });
     },
     [data, keywords, onChange]
@@ -252,83 +252,49 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
             Keywords
           </label>
 
-          {/* Existing keywords */}
+          {/* Existing keywords, as removable tags */}
           {keywords.length > 0 && (
-            <div className="mb-3 space-y-2">
+            <div className="mb-2 flex flex-wrap gap-1.5">
               {keywords.map((keyword, index) => (
-                <div
+                <span
                   key={index}
-                  className="flex items-center gap-2 rounded-lg border border-border bg-card p-2"
+                  className="group inline-flex max-w-full items-center gap-1 rounded-full border border-border bg-muted py-1 pl-2.5 pr-1 text-xs text-foreground"
                 >
-                  <span className="flex-1 truncate text-sm text-foreground">
-                    {keyword.value}
-                  </span>
-                  <select
-                    value={keyword.matchType}
-                    onChange={(e) =>
-                      updateKeywordMatchType(index, e.target.value as "exact" | "contains" | "startsWith")
-                    }
-                    className="rounded border border-border bg-muted px-2 py-1 text-xs text-foreground"
-                  >
-                    {matchTypes.map((m) => (
-                      <option key={m.value} value={m.value}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </select>
+                  <span className="truncate">{keyword.value}</span>
                   <button
                     type="button"
                     onClick={() => removeKeyword(index)}
-                    className="rounded p-1 text-muted-foreground/60 hover:bg-muted hover:text-muted-foreground"
+                    aria-label={`Remove keyword ${keyword.value}`}
+                    className="shrink-0 rounded-full p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
                   >
-                    <X className="h-3.5 w-3.5" />
+                    <X className="h-3 w-3" />
                   </button>
-                </div>
+                </span>
               ))}
             </div>
           )}
 
           {/* Add new keyword */}
-          <div className="flex min-w-0 items-center gap-2">
-            <input
-              type="text"
-              value={newKeyword}
-              onChange={(e) => setNewKeyword(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  addKeyword();
-                }
-              }}
-              placeholder="Enter keyword..."
-              className="min-w-0 flex-1 rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-            />
-            <select
-              value={newMatchType}
-              onChange={(e) => setNewMatchType(e.target.value as "exact" | "contains" | "startsWith")}
-              className="shrink-0 max-w-[105px] rounded-lg border border-border bg-card px-2 py-2 text-xs text-foreground focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-            >
-              {matchTypes.map((m) => (
-                <option key={m.value} value={m.value}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={addKeyword}
-              disabled={!newKeyword.trim()}
-              className="shrink-0 rounded-lg bg-emerald-500 p-2 text-white transition-colors hover:bg-emerald-600 disabled:opacity-40"
-            >
-              <Plus className="h-4 w-4" />
-            </button>
-          </div>
+          <input
+            type="text"
+            value={newKeyword}
+            onChange={(e) => setNewKeyword(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                addKeyword();
+              }
+            }}
+            onBlur={addKeyword}
+            placeholder="Type a keyword and press Enter..."
+            className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+          />
 
-          {keywords.length === 0 && (
-            <p className="mt-2 text-xs text-muted-foreground">
-              Add keywords that will trigger this flow. Press Enter or click + to add.
-            </p>
-          )}
+          <p className="mt-2 text-xs text-muted-foreground">
+            {keywords.length === 0
+              ? "Press Enter to add each keyword. Matching ignores capitalisation and fires when the word appears anywhere in the message."
+              : "Matching ignores capitalisation and fires when the word appears anywhere in the message."}
+          </p>
         </div>
       )}
 
