@@ -234,7 +234,9 @@ export function instagramFollowerRequiredTemplate(): InstagramFollowerTemplate {
             text: "Para liberar o link, primeiro abra o perfil @filipi.emilio e siga. Em instantes vou te pedir a confirmação aqui.",
             buttons: [{
               type: "url",
-              title: "Abrir perfil @filipi.emilio",
+              // Instagram rejects labels over 20 characters and aborts the send,
+              // so the profile handle stays in the message text, not the button.
+              title: "Abrir perfil",
               url: "https://www.instagram.com/filipi.emilio/",
             }],
           }],

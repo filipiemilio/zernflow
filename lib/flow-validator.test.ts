@@ -34,6 +34,24 @@ describe("validateFlowForPublication", () => {
     expect(validateFlowForPublication(nodes, []).join(" ")).toContain("100");
   });
 
+  it("rejects button and quick-reply labels Instagram would refuse at send time", () => {
+    const withLabels = (title: string, key: "buttons" | "quickReplies") => ({
+      id: "m",
+      type: "sendMessage",
+      data: { messages: [{ text: "m", [key]: [{ type: "url", title, url: "https://x.co" }] }] },
+    });
+
+    expect(
+      validateFlowForPublication([trigger, withLabels("Abrir perfil @filipi.emilio", "buttons")], []).join(" "),
+    ).toContain("20");
+    expect(
+      validateFlowForPublication([trigger, withLabels("Quero receber tudo agora", "quickReplies")], []).join(" "),
+    ).toContain("20");
+    expect(
+      validateFlowForPublication([trigger, withLabels("Abrir perfil", "buttons")], []),
+    ).toEqual([]);
+  });
+
   it("rejects follower-gated URLs that are withheld on the false branch", () => {
     const condition = {
       id: "c",

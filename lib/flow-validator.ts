@@ -31,6 +31,34 @@ function outboundUrls(node: PublishNode): string[] {
   return urls;
 }
 
+/** Instagram rejects button and quick-reply labels longer than this. */
+const MAX_TITLE_LENGTH = 20;
+
+/**
+ * Labels the platform will refuse at send time. A rejected send aborts the
+ * session mid-conversation, so these have to be caught before publishing.
+ */
+function overlongTitles(node: PublishNode): string[] {
+  if (node.type !== "sendMessage") return [];
+  const messages = Array.isArray(node.data?.messages) ? node.data.messages : [];
+  const titles: string[] = [];
+  for (const message of messages) {
+    if (!message || typeof message !== "object") continue;
+    const record = message as Record<string, unknown>;
+    for (const key of ["buttons", "quickReplies"]) {
+      const items = Array.isArray(record[key]) ? (record[key] as unknown[]) : [];
+      for (const item of items) {
+        if (!item || typeof item !== "object") continue;
+        const title = (item as Record<string, unknown>).title;
+        if (typeof title === "string" && title.length > MAX_TITLE_LENGTH) {
+          titles.push(title);
+        }
+      }
+    }
+  }
+  return titles;
+}
+
 export function validateFlowForPublication(
   nodes: PublishNode[],
   edges: PublishEdge[],
@@ -93,6 +121,14 @@ export function validateFlowForPublication(
       validateOutboundHttpUrl(configuredUrl.replace(/\{\{\w+\}\}/g, "safe"));
     } catch (error) {
       errors.push(`HTTP node ${node.id}: ${error instanceof Error ? error.message : "unsafe URL"}`);
+    }
+  }
+
+  for (const node of nodes) {
+    for (const title of overlongTitles(node)) {
+      errors.push(
+        `Node ${node.id}: label "${title}" is ${title.length} characters; Instagram rejects anything over ${MAX_TITLE_LENGTH} and the session stops mid-flow.`,
+      );
     }
   }
 

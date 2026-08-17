@@ -110,7 +110,7 @@ describe("instagramFollowerRequiredTemplate", () => {
     expect(profilePrompt.messages[0].buttons).toEqual([
       {
         type: "url",
-        title: "Abrir perfil @filipi.emilio",
+        title: "Abrir perfil",
         url: "https://www.instagram.com/filipi.emilio/",
       },
     ]);
