@@ -17,6 +17,10 @@ interface TriggerPanelData {
   postScope?: "all" | "specific";
   postIds?: string[];
   postSourceChannelId?: string;
+  /** Legacy single public reply, kept readable for rules saved before variations. */
+  replyText?: string;
+  /** Public reply variations; one is drawn at random per matching comment. */
+  replyTexts?: string[];
   [key: string]: unknown;
 }
 
@@ -73,6 +77,11 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
     data.postScope === "specific" || (!data.postScope && postIds.length > 0)
       ? "specific"
       : "all";
+  // Start with three empty slots (matching the reference product) so the reply
+  // variations are discoverable; blank slots are dropped when the flow publishes.
+  const replyTexts =
+    data.replyTexts ?? (data.replyText ? [data.replyText] : ["", "", ""]);
+  const filledReplyCount = replyTexts.filter((text) => text.trim()).length;
   const selectedSourceChannelId =
     data.postSourceChannelId || postChannels[0]?.id || "";
   const selectedPostChannel =
@@ -130,6 +139,35 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
       onChange({ ...data, postSourceChannelId: channelId, postIds: [] });
     },
     [data, onChange]
+  );
+
+  const commitReplyTexts = useCallback(
+    (updated: string[]) => {
+      // Variations supersede the legacy single reply, so drop it on write and
+      // leave the published trigger with a single source of truth.
+      const next = { ...data, replyTexts: updated };
+      delete next.replyText;
+      onChange(next);
+    },
+    [data, onChange]
+  );
+
+  const updateReplyText = useCallback(
+    (index: number, value: string) => {
+      commitReplyTexts(replyTexts.map((text, i) => (i === index ? value : text)));
+    },
+    [commitReplyTexts, replyTexts]
+  );
+
+  const addReplyVariation = useCallback(() => {
+    commitReplyTexts([...replyTexts, ""]);
+  }, [commitReplyTexts, replyTexts]);
+
+  const removeReplyVariation = useCallback(
+    (index: number) => {
+      commitReplyTexts(replyTexts.filter((_, i) => i !== index));
+    },
+    [commitReplyTexts, replyTexts]
   );
 
   const handleTriggerTypeChange = useCallback(
@@ -493,6 +531,57 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Public reply variations */}
+      {triggerType === "comment_keyword" && (
+        <div>
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <label className="block text-xs font-semibold text-foreground">
+              Public replies
+            </label>
+            <button
+              type="button"
+              onClick={addReplyVariation}
+              className="inline-flex shrink-0 items-center gap-1 text-xs font-medium text-emerald-600 hover:underline dark:text-emerald-400"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add variation
+            </button>
+          </div>
+
+          {replyTexts.length > 0 && (
+            <div className="space-y-2">
+              {replyTexts.map((replyText, index) => (
+                <div key={index} className="flex min-w-0 items-center gap-2">
+                  <input
+                    type="text"
+                    value={replyText}
+                    onChange={(e) => updateReplyText(index, e.target.value)}
+                    placeholder={`Variation ${index + 1}: Check your DMs!`}
+                    className="min-w-0 flex-1 rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeReplyVariation(index)}
+                    aria-label={`Remove variation ${index + 1}`}
+                    className="shrink-0 rounded p-1 text-muted-foreground/60 hover:bg-muted hover:text-muted-foreground"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <p className="mt-2 text-xs text-muted-foreground">
+            {filledReplyCount > 1
+              ? `One of the ${filledReplyCount} variations is drawn at random for each matching comment. Blank fields are not saved.`
+              : filledReplyCount === 1
+                ? "This reply is posted on every matching comment. Add more variations to rotate between them."
+                : "Optional. Add at least one variation to reply publicly to the comment before sending the DM."}
+          </p>
         </div>
       )}
 
