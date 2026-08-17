@@ -259,7 +259,7 @@ function MessageEditor({
           <button
             type="button"
             onClick={onRemove}
-            className="rounded p-1 text-muted-foreground/60 hover:bg-muted hover:text-muted-foreground"
+            className="shrink-0 rounded p-1 text-muted-foreground/60 hover:bg-muted hover:text-muted-foreground"
           >
             <X className="h-3.5 w-3.5" />
           </button>
@@ -336,7 +336,7 @@ function MessageEditor({
                 <Image className="h-3 w-3 text-muted-foreground/60" />
                 <label className="text-xs font-medium text-muted-foreground">Media URL</label>
               </div>
-              <div className="flex gap-2">
+              <div className="flex min-w-0 gap-2">
                 <select
                   value={message.mediaType || "image"}
                   onChange={(e) =>
@@ -391,7 +391,7 @@ function MessageEditor({
                 </button>
               </div>
               {(message.quickReplies || []).map((qr, i) => (
-                <div key={i} className="mb-2 flex items-center gap-2">
+                <div key={i} className="mb-2 flex min-w-0 items-center gap-2">
                   <input
                     type="text"
                     value={qr.title}
@@ -399,19 +399,19 @@ function MessageEditor({
                     placeholder="Label"
                     maxLength={20}
                     title="Instagram rejects quick-reply labels longer than 20 characters."
-                    className="flex-1 rounded border border-border bg-card px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="min-w-0 flex-1 rounded border border-border bg-card px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />
                   <input
                     type="text"
                     value={qr.payload}
                     onChange={(e) => updateQuickReply(i, { ...qr, payload: e.target.value })}
                     placeholder="Payload"
-                    className="flex-1 rounded border border-border bg-card px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="min-w-0 flex-1 rounded border border-border bg-card px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />
                   <button
                     type="button"
                     onClick={() => removeQuickReply(i)}
-                    className="rounded p-1 text-muted-foreground/60 hover:bg-muted hover:text-muted-foreground"
+                    className="shrink-0 rounded p-1 text-muted-foreground/60 hover:bg-muted hover:text-muted-foreground"
                   >
                     <X className="h-3 w-3" />
                   </button>
@@ -442,7 +442,7 @@ function MessageEditor({
                   key={i}
                   className="mb-2 rounded-lg border border-border bg-muted p-2.5"
                 >
-                  <div className="mb-2 flex items-center gap-2">
+                  <div className="mb-2 flex min-w-0 items-center gap-2">
                     <input
                       type="text"
                       value={btn.title}
@@ -450,17 +450,17 @@ function MessageEditor({
                       placeholder="Button label"
                       maxLength={20}
                       title="Instagram rejects button labels longer than 20 characters."
-                      className="flex-1 rounded border border-border bg-card px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      className="min-w-0 flex-1 rounded border border-border bg-card px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                     />
                     <button
                       type="button"
                       onClick={() => removeButton(i)}
-                      className="rounded p-1 text-muted-foreground/60 hover:bg-muted hover:text-muted-foreground"
+                      className="shrink-0 rounded p-1 text-muted-foreground/60 hover:bg-muted hover:text-muted-foreground"
                     >
                       <X className="h-3 w-3" />
                     </button>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
                     <select
                       value={btn.type}
                       onChange={(e) => {
@@ -472,7 +472,7 @@ function MessageEditor({
                           url: type === "url" ? btn.url || "" : undefined,
                         });
                       }}
-                      className="rounded border border-border bg-card px-2 py-1.5 text-xs text-foreground focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      className="shrink-0 rounded border border-border bg-card px-2 py-1.5 text-xs text-foreground focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                     >
                       <option value="postback">Postback</option>
                       <option value="url">URL</option>
@@ -483,7 +483,7 @@ function MessageEditor({
                         value={btn.payload || ""}
                         onChange={(e) => updateButton(i, { ...btn, payload: e.target.value })}
                         placeholder="Payload value"
-                        className="flex-1 rounded border border-border bg-card px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className="min-w-0 flex-1 rounded border border-border bg-card px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                       />
                     ) : (
                       <input
@@ -491,7 +491,7 @@ function MessageEditor({
                         value={btn.url || ""}
                         onChange={(e) => updateButton(i, { ...btn, url: e.target.value })}
                         placeholder="https://..."
-                        className="flex-1 rounded border border-border bg-card px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                        className="min-w-0 flex-1 rounded border border-border bg-card px-2 py-1.5 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                       />
                     )}
                   </div>
@@ -707,7 +707,7 @@ function CarouselCardEditor({
               key={i}
               className="mb-1.5 rounded border border-border bg-card p-2"
             >
-              <div className="mb-1.5 flex items-center gap-1.5">
+              <div className="mb-1.5 flex min-w-0 items-center gap-1.5">
                 <input
                   type="text"
                   value={btn.title}
@@ -717,7 +717,7 @@ function CarouselCardEditor({
                   placeholder="Button label"
                   maxLength={20}
                   title="Instagram rejects button labels longer than 20 characters."
-                  className="flex-1 rounded border border-border bg-card px-2 py-1 text-[11px] text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  className="min-w-0 flex-1 rounded border border-border bg-card px-2 py-1 text-[11px] text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />
                 <button
                   type="button"
@@ -727,7 +727,7 @@ function CarouselCardEditor({
                   <X className="h-2.5 w-2.5" />
                 </button>
               </div>
-              <div className="flex items-center gap-1.5">
+              <div className="flex min-w-0 items-center gap-1.5">
                 <select
                   value={btn.type}
                   onChange={(e) => {
@@ -740,7 +740,7 @@ function CarouselCardEditor({
                       url: type === "url" ? btn.url || "" : undefined,
                     });
                   }}
-                  className="rounded border border-border bg-card px-1.5 py-1 text-[11px] text-foreground focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  className="shrink-0 rounded border border-border bg-card px-1.5 py-1 text-[11px] text-foreground focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 >
                   <option value="postback">Postback</option>
                   <option value="url">URL</option>
@@ -753,7 +753,7 @@ function CarouselCardEditor({
                       updateButton(i, { ...btn, payload: e.target.value })
                     }
                     placeholder="Payload value"
-                    className="flex-1 rounded border border-border bg-card px-2 py-1 text-[11px] text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="min-w-0 flex-1 rounded border border-border bg-card px-2 py-1 text-[11px] text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />
                 ) : (
                   <input
@@ -763,7 +763,7 @@ function CarouselCardEditor({
                       updateButton(i, { ...btn, url: e.target.value })
                     }
                     placeholder="https://..."
-                    className="flex-1 rounded border border-border bg-card px-2 py-1 text-[11px] text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="min-w-0 flex-1 rounded border border-border bg-card px-2 py-1 text-[11px] text-foreground placeholder:text-muted-foreground/60 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />
                 )}
               </div>
