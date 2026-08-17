@@ -55,6 +55,20 @@ const triggerTypes: Array<{ value: TriggerType; label: string; description: stri
   { value: "comment_keyword", label: "Comment Keyword", description: "Triggered by keywords in post comments" },
 ];
 
+// Grouped for the picker: the DM types are matched by trigger-matcher on an
+// inbound message, comment_keyword by the comment processor on a comment. They
+// fire from different webhooks, so a flat list would imply a kinship they lack.
+const triggerGroups: Array<{ name: string; types: typeof triggerTypes }> = [
+  {
+    name: "Direct message",
+    types: triggerTypes.filter((t) => t.value !== "comment_keyword"),
+  },
+  {
+    name: "Comments",
+    types: triggerTypes.filter((t) => t.value === "comment_keyword"),
+  },
+];
+
 const matchTypes: Array<{ value: "exact" | "contains" | "startsWith"; label: string }> = [
   { value: "exact", label: "Exact match" },
   { value: "contains", label: "Contains" },
@@ -211,37 +225,24 @@ export function TriggerPanel({ data: rawData, onChange }: TriggerPanelProps) {
         <label className="mb-2 block text-xs font-semibold text-foreground">
           Trigger Type
         </label>
-        <div className="space-y-1.5">
-          {triggerTypes.map((t) => (
-            <label
-              key={t.value}
-              className={cn(
-                "flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors",
-                triggerType === t.value
-                  ? "border-emerald-500 bg-emerald-50 dark:border-emerald-400 dark:bg-emerald-950/40"
-                  : "border-border bg-card hover:border-input"
-              )}
-            >
-              <input
-                type="radio"
-                name="triggerType"
-                value={t.value}
-                checked={triggerType === t.value}
-                onChange={() => handleTriggerTypeChange(t.value)}
-                className="mt-0.5 h-4 w-4 border-input text-emerald-500 focus:ring-emerald-500"
-              />
-              <div>
-                <p className={cn(
-                  "text-sm font-medium",
-                  triggerType === t.value
-                    ? "text-emerald-950 dark:text-emerald-100"
-                    : "text-foreground"
-                )}>{t.label}</p>
-                <p className="text-xs text-muted-foreground">{t.description}</p>
-              </div>
-            </label>
+        <select
+          value={triggerType}
+          onChange={(e) => handleTriggerTypeChange(e.target.value)}
+          className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:border-emerald-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+        >
+          {triggerGroups.map((group) => (
+            <optgroup key={group.name} label={group.name}>
+              {group.types.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
+            </optgroup>
           ))}
-        </div>
+        </select>
+        <p className="mt-1.5 text-xs text-muted-foreground">
+          {triggerTypes.find((t) => t.value === triggerType)?.description}
+        </p>
       </div>
 
       {/* Keywords Section */}

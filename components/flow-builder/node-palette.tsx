@@ -2,6 +2,11 @@
 
 import {
   Zap,
+  MousePointerClick,
+  Reply,
+  DoorOpen,
+  CornerDownRight,
+  MessageSquareReply,
   MessageSquare,
   GitBranch,
   Clock,
@@ -24,6 +29,8 @@ interface PaletteItem {
   label: string;
   icon: typeof Zap;
   actionType?: string;
+  /** Pre-selects the mode of a dropped trigger node. */
+  triggerType?: string;
 }
 
 interface PaletteCategory {
@@ -32,10 +39,53 @@ interface PaletteCategory {
 }
 
 const categories: PaletteCategory[] = [
+  // Triggers are split by the event that fires them: the DM ones are matched by
+  // trigger-matcher on an inbound message, comment ones by the comment processor
+  // on an Instagram comment. A flat list hides that they are separate pipelines.
   {
-    name: "Triggers",
+    name: "DM Triggers",
     items: [
-      { type: "trigger", nodeType: "trigger", label: "Keyword Trigger", icon: Zap },
+      { type: "trigger", nodeType: "trigger", triggerType: "keyword", label: "Keyword", icon: Zap },
+      {
+        type: "trigger",
+        nodeType: "trigger",
+        triggerType: "postback",
+        label: "Button Click",
+        icon: MousePointerClick,
+      },
+      {
+        type: "trigger",
+        nodeType: "trigger",
+        triggerType: "quick_reply",
+        label: "Quick Reply",
+        icon: Reply,
+      },
+      {
+        type: "trigger",
+        nodeType: "trigger",
+        triggerType: "welcome",
+        label: "Welcome Message",
+        icon: DoorOpen,
+      },
+      {
+        type: "trigger",
+        nodeType: "trigger",
+        triggerType: "default",
+        label: "Default Reply",
+        icon: CornerDownRight,
+      },
+    ],
+  },
+  {
+    name: "Comment Triggers",
+    items: [
+      {
+        type: "trigger",
+        nodeType: "trigger",
+        triggerType: "comment_keyword",
+        label: "Comment Keyword",
+        icon: MessageSquareReply,
+      },
     ],
   },
   {
@@ -157,6 +207,7 @@ function onDragStart(event: DragEvent, item: PaletteItem) {
     type: item.type,
     nodeType: item.nodeType,
     actionType: item.actionType,
+    triggerType: item.triggerType,
   });
   event.dataTransfer.setData("application/reactflow", data);
   event.dataTransfer.effectAllowed = "move";
@@ -180,7 +231,7 @@ export function NodePalette() {
                 const Icon = item.icon;
                 return (
                   <div
-                    key={item.nodeType}
+                    key={item.label}
                     draggable
                     onDragStart={(e) => onDragStart(e, item)}
                     className="flex cursor-grab items-center gap-2.5 rounded-lg border border-border bg-background px-3 py-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground active:cursor-grabbing"

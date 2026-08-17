@@ -76,10 +76,14 @@ function getNodeId() {
   return `node_${Date.now()}_${nodeId++}`;
 }
 
-function getDefaultData(type: string, actionType?: string): Record<string, unknown> {
+function getDefaultData(
+  type: string,
+  actionType?: string,
+  triggerType?: string,
+): Record<string, unknown> {
   switch (type) {
     case "trigger":
-      return { triggerType: "keyword", keywords: [] };
+      return { triggerType: triggerType || "keyword", keywords: [] };
     case "sendMessage":
       return { messages: [] };
     case "condition":
@@ -161,10 +165,11 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
       const raw = event.dataTransfer.getData("application/reactflow");
       if (!raw) return;
 
-      const { type, nodeType, actionType } = JSON.parse(raw) as {
+      const { type, nodeType, actionType, triggerType } = JSON.parse(raw) as {
         type: string;
         nodeType: string;
         actionType?: string;
+        triggerType?: string;
       };
 
       const position = screenToFlowPosition({
@@ -176,7 +181,7 @@ function FlowCanvasInner({ flow }: FlowCanvasProps) {
         id: getNodeId(),
         type,
         position,
-        data: getDefaultData(type, actionType || nodeType),
+        data: getDefaultData(type, actionType || nodeType, triggerType),
       };
 
       setNodes((nds) => [...nds, newNode]);
