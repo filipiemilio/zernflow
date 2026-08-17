@@ -64,8 +64,6 @@ export function ActionPanel({ data: rawData, onChange }: ActionPanelProps) {
       return <SmartDelayConfig data={data} onChange={onChange} />;
     case "enrollSequence":
       return <EnrollSequencePanel data={rawData} onChange={onChange} />;
-    case "commentReply":
-      return <CommentReplyConfig data={data} onChange={onChange} />;
     default:
       return (
         <p className="text-sm text-muted-foreground">
@@ -73,35 +71,6 @@ export function ActionPanel({ data: rawData, onChange }: ActionPanelProps) {
         </p>
       );
   }
-}
-
-/* ───────── Public Comment Reply ───────── */
-function CommentReplyConfig({ data, onChange }: ActionSubPanelProps) {
-  return (
-    <div className="space-y-4">
-      <div>
-        <label className="mb-2 block text-xs font-semibold text-foreground">
-          Public reply
-        </label>
-        <textarea
-          value={data.text || ""}
-          onChange={(event) => onChange({ ...data, text: event.target.value })}
-          placeholder="Ex.: Pronto! Enviei o link no seu direct 🚀"
-          rows={4}
-          maxLength={2200}
-          className="w-full resize-none rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-ring focus:outline-none focus:ring-1 focus:ring-ring"
-        />
-        <div className="mt-1.5 flex justify-between gap-3 text-[11px] text-muted-foreground">
-          <span>Reply to the original Instagram comment.</span>
-          <span>{(data.text || "").length}/2200</span>
-        </div>
-      </div>
-      <div className="rounded-lg border border-border bg-muted/40 p-3 text-[11px] text-muted-foreground">
-        Available variables: {"{{commenter_name}}"}, {"{{comment_text}}"}, {"{{post_id}}"}.
-        This action only runs in flows triggered by an Instagram comment.
-      </div>
-    </div>
-  );
 }
 
 /* ───────── Tag Config ───────── */

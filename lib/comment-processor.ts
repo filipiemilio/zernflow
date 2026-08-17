@@ -243,9 +243,11 @@ export async function processComment({
       }
     }
 
-    // Local conversation only — there is no Zernio DM conversation until the
-    // flow's privateReply node creates one, so late_conversation_id stays null
-    // and sendMessage nodes in comment flows are no-ops until the contact replies.
+    // Local conversation only — the Zernio DM thread does not exist yet, so
+    // late_conversation_id stays null. The flow's first sendMessage node detects
+    // this comment context (shouldSendCommentPrivateReply) and delivers that
+    // message through the private-reply endpoint, which is what opens the thread;
+    // later sendMessage nodes then reuse the resulting conversation.
     const { data: conversation } = await supabase
       .from("conversations")
       .upsert(

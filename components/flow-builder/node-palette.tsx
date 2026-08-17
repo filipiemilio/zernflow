@@ -3,7 +3,6 @@
 import {
   Zap,
   MessageSquare,
-  MessageSquareReply,
   GitBranch,
   Clock,
   Tag,
@@ -86,13 +85,6 @@ const categories: PaletteCategory[] = [
   {
     name: "Actions",
     items: [
-      {
-        type: "action",
-        nodeType: "commentReply",
-        label: "Comment Reply",
-        icon: MessageSquareReply,
-        actionType: "commentReply",
-      },
       {
         type: "action",
         nodeType: "addTag",
