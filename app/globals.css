@@ -103,7 +103,7 @@
    order, and the edge stroke lives here rather than on each edge object so
    flows saved with older inline styles still render consistently. */
 :root {
-  --flow-edge: oklch(0.72 0.13 172);
+  --flow-edge: #3a3a3a;
 }
 
 .react-flow__handle.zf-handle {
