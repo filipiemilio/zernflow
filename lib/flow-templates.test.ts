@@ -93,34 +93,48 @@ describe("Instagram template profile references", () => {
 });
 
 describe("instagramFollowerRequiredTemplate", () => {
-  it("requires a profile visit step and retries follower verification before ending", () => {
+  it("matches the texto whisper reference flow: no preset keyword, blank link buttons, tuned retry timing", () => {
     const template = instagramFollowerRequiredTemplate();
     const byId = Object.fromEntries(template.nodes.map((node) => [node.id, node]));
     const opening = byId["required-opening"].data as MessageData;
     const profilePrompt = byId["follow-profile-prompt"].data as MessageData;
     const confirmationPrompt = byId["follow-confirmation-prompt"].data as MessageData;
+    const initialDelivery = byId["initial-link-delivery"].data as MessageData;
+    const requiredDelivery = byId["required-link-delivery"].data as MessageData;
 
-    expect(opening.messages[0].buttons).toEqual([
-      {
-        type: "postback",
-        title: "Quero receber",
-        payload: "ZF_OPEN_{{session_id}}",
-      },
-    ]);
-    expect(profilePrompt.messages[0].buttons).toEqual([
-      {
-        type: "url",
-        title: "Abrir perfil",
-        url: "https://www.instagram.com/filipi.emilio/",
-      },
-    ]);
+    // The keyword is project-specific, so the template leaves it for the next
+    // person to fill in rather than presetting one that would need editing anyway.
+    expect(byId["required-trigger"].data.keywords).toEqual([]);
     expect(byId["required-trigger"].data.replyTexts).toHaveLength(3);
     expect(byId["required-trigger"].data.replyTexts).toEqual(
       expect.arrayContaining([expect.stringMatching(/dm/i)]),
     );
+
+    expect(opening.messages[0].buttons).toEqual([
+      {
+        type: "postback",
+        title: "Pode mandar!",
+        payload: "ZF_OPEN_{{session_id}}",
+      },
+    ]);
+
+    // Both delivery buttons are blank on purpose: every project promises a
+    // different link, unlike the follow-profile button, which always points
+    // at the same account and so keeps a real title and URL.
+    for (const delivery of [initialDelivery, requiredDelivery]) {
+      expect(delivery.messages[0].buttons).toEqual([{ type: "url", title: "", url: "" }]);
+    }
+    expect(profilePrompt.messages[0].buttons).toEqual([
+      {
+        type: "url",
+        title: "Seguir Perfil",
+        url: "https://www.instagram.com/filipi.emilio/",
+      },
+    ]);
+
     expect(byId["follow-profile-delay"]).toMatchObject({
       type: "delay",
-      data: { duration: 1, unit: "minutes" },
+      data: { duration: 15, unit: "seconds" },
     });
     expect(confirmationPrompt.messages[0].buttons).toEqual([
       {
@@ -134,19 +148,32 @@ describe("instagramFollowerRequiredTemplate", () => {
       data: { actionType: "smartDelay", expectedPayload: "ZF_FOLLOWED_{{session_id}}" },
     });
 
+    // The "confirming your follow" message node was cut from the reference
+    // flow, so follow-wait resumes straight into the recheck sequence.
+    expect(byId["follow-checking-feedback"]).toBeUndefined();
+    expect(template.edges).toEqual(
+      expect.arrayContaining([
+        { id: "required-e9", source: "follow-wait", target: "follower-recheck-before-first" },
+      ]),
+    );
+
     for (const id of ["follower-recheck-1", "follower-recheck-2", "follower-recheck-3"]) {
       expect(byId[id].data).toMatchObject({
         conditionType: "instagram_follower",
         allowFollowerGatedContent: true,
       });
     }
+    expect(byId["follower-recheck-before-first"]).toMatchObject({
+      type: "delay",
+      data: { duration: 5, unit: "seconds" },
+    });
     expect(byId["follower-recheck-delay-1"]).toMatchObject({
       type: "delay",
-      data: { duration: 1, unit: "minutes" },
+      data: { duration: 30, unit: "seconds" },
     });
     expect(byId["follower-recheck-delay-2"]).toMatchObject({
       type: "delay",
-      data: { duration: 2, unit: "minutes" },
+      data: { duration: 1, unit: "minutes" },
     });
     expect(byId["follower-not-confirmed"]).toBeDefined();
 
@@ -159,19 +186,19 @@ describe("instagramFollowerRequiredTemplate", () => {
           sourceHandle: "false",
         },
         {
-          id: "required-e12",
+          id: "required-e11",
           source: "follower-recheck-1",
           target: "follower-recheck-delay-1",
           sourceHandle: "false",
         },
         {
-          id: "required-e15",
+          id: "required-e14",
           source: "follower-recheck-2",
           target: "follower-recheck-delay-2",
           sourceHandle: "false",
         },
         {
-          id: "required-e18",
+          id: "required-e17",
           source: "follower-recheck-3",
           target: "follower-not-confirmed",
           sourceHandle: "false",
