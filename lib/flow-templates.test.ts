@@ -149,11 +149,13 @@ describe("instagramFollowerRequiredTemplate", () => {
     });
 
     // The "confirming your follow" message node was cut from the reference
-    // flow, so follow-wait resumes straight into the recheck sequence.
+    // flow, so follow-wait resumes straight into the recheck sequence, and
+    // the first check happens immediately — no forced wait before it.
     expect(byId["follow-checking-feedback"]).toBeUndefined();
+    expect(byId["follower-recheck-before-first"]).toBeUndefined();
     expect(template.edges).toEqual(
       expect.arrayContaining([
-        { id: "required-e9", source: "follow-wait", target: "follower-recheck-before-first" },
+        { id: "required-e9", source: "follow-wait", target: "follower-recheck-1" },
       ]),
     );
 
@@ -163,21 +165,29 @@ describe("instagramFollowerRequiredTemplate", () => {
         allowFollowerGatedContent: true,
       });
     }
-    // 1/2/3-minute backoff: a 95-second window (5s/30s/1min) measured too
-    // tight in production, failing all three checks for a contact who had
-    // actually followed before Instagram's follower status caught up.
-    expect(byId["follower-recheck-before-first"]).toMatchObject({
+
+    // Fastest-first sequence: immediate check, then one short automatic
+    // retry (catches near-instant propagation lag without contact action),
+    // then an unbounded reactive wait resumed by the contact's own next
+    // message — replacing the old fixed-clock delay that gave up on a
+    // contact who really had followed but took longer than the window.
+    expect(byId["follower-recheck-delay-1"]).toMatchObject({
       type: "delay",
       data: { duration: 1, unit: "minutes" },
     });
-    expect(byId["follower-recheck-delay-1"]).toMatchObject({
-      type: "delay",
-      data: { duration: 2, unit: "minutes" },
+    expect(byId["follower-recheck-delay-2"]).toBeUndefined();
+    expect(byId["follower-recheck-wait"]).toMatchObject({
+      type: "action",
+      data: { actionType: "smartDelay" },
     });
-    expect(byId["follower-recheck-delay-2"]).toMatchObject({
-      type: "delay",
-      data: { duration: 3, unit: "minutes" },
-    });
+    // Deliberately no expectedPayload/acceptedText: matchesWaitingSessionInput
+    // treats an unconstrained wait as satisfied by any inbound message, so a
+    // free-text reply resumes it just as well as a button tap would.
+    expect(byId["follower-recheck-wait"].data.expectedPayload).toBeUndefined();
+    expect(byId["follower-recheck-wait"].data.acceptedText).toBeUndefined();
+
+    expect(byId["follow-recheck-feedback-1"].data.messages).toHaveLength(1);
+    expect(byId["follow-recheck-feedback-2"].data.messages).toHaveLength(1);
     expect(byId["follower-not-confirmed"]).toBeDefined();
 
     expect(template.edges).toEqual(
@@ -189,24 +199,34 @@ describe("instagramFollowerRequiredTemplate", () => {
           sourceHandle: "false",
         },
         {
-          id: "required-e11",
+          id: "required-e10",
           source: "follower-recheck-1",
-          target: "follower-recheck-delay-1",
+          target: "follow-recheck-feedback-1",
           sourceHandle: "false",
         },
+        { id: "required-e11", source: "follow-recheck-feedback-1", target: "follower-recheck-delay-1" },
+        { id: "required-e12", source: "follower-recheck-delay-1", target: "follower-recheck-2" },
         {
           id: "required-e14",
           source: "follower-recheck-2",
-          target: "follower-recheck-delay-2",
+          target: "follow-recheck-feedback-2",
           sourceHandle: "false",
         },
+        { id: "required-e15", source: "follow-recheck-feedback-2", target: "follower-recheck-wait" },
+        { id: "required-e16", source: "follower-recheck-wait", target: "follower-recheck-3" },
         {
-          id: "required-e17",
+          id: "required-e18",
           source: "follower-recheck-3",
           target: "follower-not-confirmed",
           sourceHandle: "false",
         },
       ]),
     );
+
+    // No cycles: every recheck round is a distinct forward node, never a
+    // loop back to an already-visited one, which the publish validator
+    // would otherwise reject outright.
+    const nodeIds = new Set(template.nodes.map((n) => n.id));
+    expect(nodeIds.size).toBe(template.nodes.length);
   });
 });

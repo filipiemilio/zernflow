@@ -157,12 +157,18 @@ export function instagramFollowerGateTemplate(): InstagramFollowerTemplate {
  * cloned from: same node graph, wait/retry timing and UX copy, but with the
  * keyword and the two delivered-link buttons left blank for the next
  * project to fill in. A non-follower first receives only the profile link.
- * A later, session-bound confirmation starts a delayed verification
- * sequence — three attempts with a 1/2/3-minute backoff, absorbing
- * follower-status propagation delays from Instagram/Zernio (a 95-second
- * window measured too tight in production: a contact who really had
- * followed still failed all three checks) — while keeping the promised
- * link gated on a positive live check.
+ *
+ * A later, session-bound confirmation runs three follower-status checks,
+ * fastest first: an immediate check (no wait, since the propagation delay
+ * this absorbs is usually already gone by the time the contact taps the
+ * button), then one short automatic retry (1 minute, for the near-instant
+ * lag case), then an unbounded reactive wait that resumes on whatever the
+ * contact sends next — a real reply, not a fixed clock, so someone who
+ * checks back five minutes or five hours later still gets picked back up
+ * instead of hitting a dead end. A prior fixed 95-second window (and later
+ * a fixed 6-minute one) both failed a real contact who had genuinely
+ * followed and simply took longer than the window to be recognized as one.
+ * Both branches deliver the same link; follower status only personalizes.
  */
 export function instagramFollowerRequiredTemplate(): InstagramFollowerTemplate {
   const verifiedFollowerCondition = {
@@ -278,45 +284,73 @@ export function instagramFollowerRequiredTemplate(): InstagramFollowerTemplate {
         },
       },
       {
-        id: "follower-recheck-before-first",
-        type: "delay",
-        position: { x: 700, y: 1420 },
-        data: { label: "Aguardar sincronização inicial", duration: 1, unit: "minutes" },
-      },
-      {
+        // Checked the instant follow-wait resumes — no forced wait for the
+        // common case where the follow already propagated.
         id: "follower-recheck-1",
         type: "condition",
-        position: { x: 700, y: 1600 },
-        data: { label: "Confirmar follow — tentativa 1", ...verifiedFollowerCondition },
+        position: { x: 700, y: 1420 },
+        data: { label: "Confirmar follow — tentativa 1 (imediata)", ...verifiedFollowerCondition },
       },
       {
+        id: "follow-recheck-feedback-1",
+        type: "sendMessage",
+        position: { x: 1000, y: 1600 },
+        data: {
+          label: "Avisar 1ª tentativa",
+          messages: [{ text: "Ainda não confirmei — só um instante, já vou checar de novo ✅" }],
+        },
+      },
+      {
+        // One short automatic retry: catches follow-status propagation lag
+        // of a few seconds to a couple of minutes without requiring the
+        // contact to do anything.
         id: "follower-recheck-delay-1",
         type: "delay",
         position: { x: 1000, y: 1780 },
-        data: { duration: 2, unit: "minutes" },
+        data: { label: "Aguardar sincronização", duration: 1, unit: "minutes" },
       },
       {
         id: "follower-recheck-2",
         type: "condition",
         position: { x: 1000, y: 1960 },
-        data: { label: "Confirmar follow — tentativa 2", ...verifiedFollowerCondition },
+        data: { label: "Confirmar follow — tentativa 2 (automática)", ...verifiedFollowerCondition },
       },
       {
-        id: "follower-recheck-delay-2",
-        type: "delay",
-        position: { x: 1000, y: 2140 },
-        data: { label: "Aguardar sincronização final", duration: 3, unit: "minutes" },
+        id: "follow-recheck-feedback-2",
+        type: "sendMessage",
+        position: { x: 1300, y: 2140 },
+        data: {
+          label: "Avisar 2ª tentativa e convidar resposta",
+          messages: [{
+            text: "Ainda não consegui confirmar. Sem pressa — quando tiver seguido, me manda qualquer mensagem aqui que eu confiro na hora 👍",
+          }],
+        },
+      },
+      {
+        // No expectedPayload/acceptedText: matchesWaitingSessionInput treats
+        // an unconstrained wait as satisfied by any inbound message, so this
+        // resumes on whatever the contact sends next, however long that
+        // takes — a text reply, not just the original postback button.
+        id: "follower-recheck-wait",
+        type: "action",
+        position: { x: 1300, y: 2320 },
+        data: {
+          label: "Aguardar próxima mensagem do contato",
+          actionType: "smartDelay",
+          timeout: 1440,
+          timeoutUnit: "minutes",
+        },
       },
       {
         id: "follower-recheck-3",
         type: "condition",
-        position: { x: 1000, y: 2320 },
-        data: { label: "Confirmar follow — tentativa 3", ...verifiedFollowerCondition },
+        position: { x: 1300, y: 2500 },
+        data: { label: "Confirmar follow — tentativa 3 (reativa)", ...verifiedFollowerCondition },
       },
       {
         id: "required-link-delivery",
         type: "sendMessage",
-        position: { x: 400, y: 2500 },
+        position: { x: 400, y: 2680 },
         data: {
           label: "Follow confirmado → enviar link",
           messages: [{
@@ -328,7 +362,7 @@ export function instagramFollowerRequiredTemplate(): InstagramFollowerTemplate {
       {
         id: "follower-not-confirmed",
         type: "sendMessage",
-        position: { x: 1300, y: 2500 },
+        position: { x: 1700, y: 2680 },
         data: {
           label: "Follow ainda não confirmado",
           messages: [{
@@ -346,16 +380,17 @@ export function instagramFollowerRequiredTemplate(): InstagramFollowerTemplate {
       { id: "required-e6", source: "follow-profile-prompt", target: "follow-profile-delay" },
       { id: "required-e7", source: "follow-profile-delay", target: "follow-confirmation-prompt" },
       { id: "required-e8", source: "follow-confirmation-prompt", target: "follow-wait" },
-      { id: "required-e9", source: "follow-wait", target: "follower-recheck-before-first" },
-      { id: "required-e10", source: "follower-recheck-before-first", target: "follower-recheck-1" },
-      { id: "required-e11", source: "follower-recheck-1", target: "follower-recheck-delay-1", sourceHandle: "false" },
+      { id: "required-e9", source: "follow-wait", target: "follower-recheck-1" },
+      { id: "required-e10", source: "follower-recheck-1", target: "follow-recheck-feedback-1", sourceHandle: "false" },
+      { id: "required-e11", source: "follow-recheck-feedback-1", target: "follower-recheck-delay-1" },
       { id: "required-e12", source: "follower-recheck-delay-1", target: "follower-recheck-2" },
       { id: "required-e13", source: "follower-recheck-1", target: "required-link-delivery", sourceHandle: "true" },
-      { id: "required-e14", source: "follower-recheck-2", target: "follower-recheck-delay-2", sourceHandle: "false" },
-      { id: "required-e15", source: "follower-recheck-delay-2", target: "follower-recheck-3" },
-      { id: "required-e16", source: "follower-recheck-2", target: "required-link-delivery", sourceHandle: "true" },
-      { id: "required-e17", source: "follower-recheck-3", target: "follower-not-confirmed", sourceHandle: "false" },
-      { id: "required-e18", source: "follower-recheck-3", target: "required-link-delivery", sourceHandle: "true" },
+      { id: "required-e14", source: "follower-recheck-2", target: "follow-recheck-feedback-2", sourceHandle: "false" },
+      { id: "required-e15", source: "follow-recheck-feedback-2", target: "follower-recheck-wait" },
+      { id: "required-e16", source: "follower-recheck-wait", target: "follower-recheck-3" },
+      { id: "required-e17", source: "follower-recheck-2", target: "required-link-delivery", sourceHandle: "true" },
+      { id: "required-e18", source: "follower-recheck-3", target: "follower-not-confirmed", sourceHandle: "false" },
+      { id: "required-e19", source: "follower-recheck-3", target: "required-link-delivery", sourceHandle: "true" },
     ],
   };
 }
