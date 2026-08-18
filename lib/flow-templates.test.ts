@@ -3,6 +3,7 @@ import {
   instagramFollowerGateTemplate,
   instagramFollowerRequiredTemplate,
 } from "./flow-templates";
+import { validateFlowForPublication } from "./flow-validator";
 
 const CANVAS_NODE_TYPES = new Set([
   "trigger",
@@ -97,8 +98,6 @@ describe("instagramFollowerRequiredTemplate", () => {
     const template = instagramFollowerRequiredTemplate();
     const byId = Object.fromEntries(template.nodes.map((node) => [node.id, node]));
     const opening = byId["required-opening"].data as MessageData;
-    const profilePrompt = byId["follow-profile-prompt"].data as MessageData;
-    const confirmationPrompt = byId["follow-confirmation-prompt"].data as MessageData;
     const initialDelivery = byId["initial-link-delivery"].data as MessageData;
     const requiredDelivery = byId["required-link-delivery"].data as MessageData;
 
@@ -124,40 +123,45 @@ describe("instagramFollowerRequiredTemplate", () => {
     for (const delivery of [initialDelivery, requiredDelivery]) {
       expect(delivery.messages[0].buttons).toEqual([{ type: "url", title: "", url: "" }]);
     }
-    expect(profilePrompt.messages[0].buttons).toEqual([
+    // Every gate prompt carries both buttons, so the contact can act the
+    // moment they are back rather than waiting for a second message.
+    const gateButtons = [
       {
         type: "url",
         title: "Seguir Perfil",
         url: "https://www.instagram.com/filipi.emilio/",
       },
-    ]);
-
-    expect(byId["follow-profile-delay"]).toMatchObject({
-      type: "delay",
-      data: { duration: 15, unit: "seconds" },
-    });
-    expect(confirmationPrompt.messages[0].buttons).toEqual([
       {
         type: "postback",
         title: "Já segui",
         payload: "ZF_FOLLOWED_{{session_id}}",
       },
-    ]);
-    expect(byId["follow-wait"]).toMatchObject({
-      type: "action",
-      data: { actionType: "smartDelay", expectedPayload: "ZF_FOLLOWED_{{session_id}}" },
-    });
+    ];
+    for (const id of ["follow-profile-prompt", "follow-retry-prompt-1", "follow-retry-prompt-2"]) {
+      const data = byId[id].data as MessageData;
+      expect(data.messages[0].buttons).toEqual(gateButtons);
+    }
 
-    // The "confirming your follow" message node was cut from the reference
-    // flow, so follow-wait resumes straight into the recheck sequence, and
-    // the first check happens immediately — no forced wait before it.
-    expect(byId["follow-checking-feedback"]).toBeUndefined();
-    expect(byId["follower-recheck-before-first"]).toBeUndefined();
-    expect(template.edges).toEqual(
-      expect.arrayContaining([
-        { id: "required-e9", source: "follow-wait", target: "follower-recheck-1" },
-      ]),
-    );
+    // A negative check resends the identical prompt, so the retry reads as the
+    // same offer rather than an escalation.
+    const promptText = (byId["follow-profile-prompt"].data as MessageData).messages[0].text;
+    for (const id of ["follow-retry-prompt-1", "follow-retry-prompt-2"]) {
+      expect((byId[id].data as MessageData).messages[0].text).toBe(promptText);
+    }
+
+    // Nothing in the gate runs on a clock: the contact's tap drives every step.
+    expect(template.nodes.some((node) => node.type === "delay")).toBe(false);
+    expect(byId["follow-profile-delay"]).toBeUndefined();
+    expect(byId["follow-confirmation-prompt"]).toBeUndefined();
+
+    // All three waits listen for the same payload, so tapping the button on an
+    // earlier prompt still advances whichever wait the session is parked on.
+    for (const id of ["follow-wait", "follow-wait-2", "follow-wait-3"]) {
+      expect(byId[id]).toMatchObject({
+        type: "action",
+        data: { actionType: "smartDelay", expectedPayload: "ZF_FOLLOWED_{{session_id}}" },
+      });
+    }
 
     for (const id of ["follower-recheck-1", "follower-recheck-2", "follower-recheck-3"]) {
       expect(byId[id].data).toMatchObject({
@@ -166,30 +170,7 @@ describe("instagramFollowerRequiredTemplate", () => {
       });
     }
 
-    // Fastest-first sequence: immediate check, then one short automatic
-    // retry (catches near-instant propagation lag without contact action),
-    // then an unbounded reactive wait resumed by the contact's own next
-    // message — replacing the old fixed-clock delay that gave up on a
-    // contact who really had followed but took longer than the window.
-    expect(byId["follower-recheck-delay-1"]).toMatchObject({
-      type: "delay",
-      data: { duration: 1, unit: "minutes" },
-    });
-    expect(byId["follower-recheck-delay-2"]).toBeUndefined();
-    expect(byId["follower-recheck-wait"]).toMatchObject({
-      type: "action",
-      data: { actionType: "smartDelay" },
-    });
-    // Deliberately no expectedPayload/acceptedText: matchesWaitingSessionInput
-    // treats an unconstrained wait as satisfied by any inbound message, so a
-    // free-text reply resumes it just as well as a button tap would.
-    expect(byId["follower-recheck-wait"].data.expectedPayload).toBeUndefined();
-    expect(byId["follower-recheck-wait"].data.acceptedText).toBeUndefined();
-
-    expect(byId["follow-recheck-feedback-1"].data.messages).toHaveLength(1);
-    expect(byId["follow-recheck-feedback-2"].data.messages).toHaveLength(1);
-    expect(byId["follower-not-confirmed"]).toBeDefined();
-
+    // Every check delivers on a pass; only the last one gives up.
     expect(template.edges).toEqual(
       expect.arrayContaining([
         {
@@ -198,24 +179,34 @@ describe("instagramFollowerRequiredTemplate", () => {
           target: "follow-profile-prompt",
           sourceHandle: "false",
         },
+        { id: "required-e6", source: "follow-profile-prompt", target: "follow-wait" },
+        { id: "required-e7", source: "follow-wait", target: "follower-recheck-1" },
         {
-          id: "required-e10",
+          id: "required-e8",
           source: "follower-recheck-1",
-          target: "follow-recheck-feedback-1",
+          target: "required-link-delivery",
+          sourceHandle: "true",
+        },
+        {
+          id: "required-e9",
+          source: "follower-recheck-1",
+          target: "follow-retry-prompt-1",
           sourceHandle: "false",
         },
-        { id: "required-e11", source: "follow-recheck-feedback-1", target: "follower-recheck-delay-1" },
-        { id: "required-e12", source: "follower-recheck-delay-1", target: "follower-recheck-2" },
         {
-          id: "required-e14",
+          id: "required-e12",
           source: "follower-recheck-2",
-          target: "follow-recheck-feedback-2",
-          sourceHandle: "false",
+          target: "required-link-delivery",
+          sourceHandle: "true",
         },
-        { id: "required-e15", source: "follow-recheck-feedback-2", target: "follower-recheck-wait" },
-        { id: "required-e16", source: "follower-recheck-wait", target: "follower-recheck-3" },
         {
-          id: "required-e18",
+          id: "required-e16",
+          source: "follower-recheck-3",
+          target: "required-link-delivery",
+          sourceHandle: "true",
+        },
+        {
+          id: "required-e17",
           source: "follower-recheck-3",
           target: "follower-not-confirmed",
           sourceHandle: "false",
@@ -223,10 +214,16 @@ describe("instagramFollowerRequiredTemplate", () => {
       ]),
     );
 
-    // No cycles: every recheck round is a distinct forward node, never a
-    // loop back to an already-visited one, which the publish validator
-    // would otherwise reject outright.
+    expect(byId["follower-not-confirmed"]).toBeDefined();
+
+    // Node ids are unique, and the graph runs strictly forward — the publish
+    // validator rejects cycles outright.
     const nodeIds = new Set(template.nodes.map((n) => n.id));
     expect(nodeIds.size).toBe(template.nodes.length);
+  });
+
+  it("passes the real publish validator", () => {
+    const template = instagramFollowerRequiredTemplate();
+    expect(validateFlowForPublication(template.nodes, template.edges)).toEqual([]);
   });
 });
