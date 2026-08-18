@@ -158,8 +158,10 @@ export function instagramFollowerGateTemplate(): InstagramFollowerTemplate {
  * keyword and the two delivered-link buttons left blank for the next
  * project to fill in. A non-follower first receives only the profile link.
  * A later, session-bound confirmation starts a delayed verification
- * sequence — three attempts with a short backoff, absorbing follower-status
- * propagation delays from Instagram/Zernio — while keeping the promised
+ * sequence — three attempts with a 1/2/3-minute backoff, absorbing
+ * follower-status propagation delays from Instagram/Zernio (a 95-second
+ * window measured too tight in production: a contact who really had
+ * followed still failed all three checks) — while keeping the promised
  * link gated on a positive live check.
  */
 export function instagramFollowerRequiredTemplate(): InstagramFollowerTemplate {
@@ -279,7 +281,7 @@ export function instagramFollowerRequiredTemplate(): InstagramFollowerTemplate {
         id: "follower-recheck-before-first",
         type: "delay",
         position: { x: 700, y: 1420 },
-        data: { label: "Aguardar sincronização inicial", duration: 5, unit: "seconds" },
+        data: { label: "Aguardar sincronização inicial", duration: 1, unit: "minutes" },
       },
       {
         id: "follower-recheck-1",
@@ -291,7 +293,7 @@ export function instagramFollowerRequiredTemplate(): InstagramFollowerTemplate {
         id: "follower-recheck-delay-1",
         type: "delay",
         position: { x: 1000, y: 1780 },
-        data: { duration: 30, unit: "seconds" },
+        data: { duration: 2, unit: "minutes" },
       },
       {
         id: "follower-recheck-2",
@@ -303,7 +305,7 @@ export function instagramFollowerRequiredTemplate(): InstagramFollowerTemplate {
         id: "follower-recheck-delay-2",
         type: "delay",
         position: { x: 1000, y: 2140 },
-        data: { label: "Aguardar sincronização final", duration: 1, unit: "minutes" },
+        data: { label: "Aguardar sincronização final", duration: 3, unit: "minutes" },
       },
       {
         id: "follower-recheck-3",

@@ -163,17 +163,20 @@ describe("instagramFollowerRequiredTemplate", () => {
         allowFollowerGatedContent: true,
       });
     }
+    // 1/2/3-minute backoff: a 95-second window (5s/30s/1min) measured too
+    // tight in production, failing all three checks for a contact who had
+    // actually followed before Instagram's follower status caught up.
     expect(byId["follower-recheck-before-first"]).toMatchObject({
       type: "delay",
-      data: { duration: 5, unit: "seconds" },
+      data: { duration: 1, unit: "minutes" },
     });
     expect(byId["follower-recheck-delay-1"]).toMatchObject({
       type: "delay",
-      data: { duration: 30, unit: "seconds" },
+      data: { duration: 2, unit: "minutes" },
     });
     expect(byId["follower-recheck-delay-2"]).toMatchObject({
       type: "delay",
-      data: { duration: 1, unit: "minutes" },
+      data: { duration: 3, unit: "minutes" },
     });
     expect(byId["follower-not-confirmed"]).toBeDefined();
 
