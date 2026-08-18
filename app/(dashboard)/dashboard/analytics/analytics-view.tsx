@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import {
   BarChart3,
   GitBranch,
@@ -10,6 +11,7 @@ import {
   TrendingUp,
   TrendingDown,
   Calendar,
+  ChevronRight,
   Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -587,50 +589,70 @@ export function AnalyticsView({
                       <th className="px-4 py-3 text-xs font-medium uppercase text-muted-foreground text-right">
                         Completions
                       </th>
-                      <th className="px-6 py-3 text-xs font-medium uppercase text-muted-foreground text-right">
+                      <th className="px-4 py-3 text-xs font-medium uppercase text-muted-foreground text-right">
                         Drop-off Rate
                       </th>
+                      <th className="w-8" />
                     </tr>
                   </thead>
                   <tbody>
                     {flowPerformance.map((flow) => (
-                      <tr
-                        key={flow.id}
-                        className="border-b border-border last:border-0 transition-colors hover:bg-accent/50"
-                      >
-                        <td className="px-6 py-3">
-                          <span className="text-sm font-medium">
-                            {flow.name}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <span className="text-sm text-muted-foreground">
-                            {flow.starts}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <span className="text-sm text-muted-foreground">
-                            {flow.completions}
-                          </span>
-                        </td>
-                        <td className="px-6 py-3 text-right">
-                          <span
-                            className={cn(
-                              "inline-flex items-center gap-1 text-sm font-medium",
-                              flow.dropOffRate > 50
-                                ? "text-red-600"
-                                : flow.dropOffRate > 25
-                                  ? "text-yellow-600"
-                                  : "text-green-600"
-                            )}
+                      <tr key={flow.id} className="border-b border-border last:border-0">
+                        <td className="p-0">
+                          <Link
+                            href={`/dashboard/analytics/${flow.id}`}
+                            className="flex items-center px-6 py-3 text-sm font-medium transition-colors hover:bg-accent/50"
                           >
-                            {flow.dropOffRate > 50 ? (
-                              <TrendingDown className="h-3.5 w-3.5" />
-                            ) : (
-                              <TrendingUp className="h-3.5 w-3.5" />
-                            )}
-                            {flow.dropOffRate}%
-                          </span>
+                            {flow.name}
+                          </Link>
+                        </td>
+                        <td className="p-0">
+                          <Link
+                            href={`/dashboard/analytics/${flow.id}`}
+                            className="flex items-center justify-end px-4 py-3 text-sm text-muted-foreground transition-colors hover:bg-accent/50"
+                          >
+                            {flow.starts}
+                          </Link>
+                        </td>
+                        <td className="p-0">
+                          <Link
+                            href={`/dashboard/analytics/${flow.id}`}
+                            className="flex items-center justify-end px-4 py-3 text-sm text-muted-foreground transition-colors hover:bg-accent/50"
+                          >
+                            {flow.completions}
+                          </Link>
+                        </td>
+                        <td className="p-0">
+                          <Link
+                            href={`/dashboard/analytics/${flow.id}`}
+                            className="flex items-center justify-end px-4 py-3 transition-colors hover:bg-accent/50"
+                          >
+                            <span
+                              className={cn(
+                                "inline-flex items-center gap-1 text-sm font-medium",
+                                flow.dropOffRate > 50
+                                  ? "text-red-600"
+                                  : flow.dropOffRate > 25
+                                    ? "text-yellow-600"
+                                    : "text-green-600"
+                              )}
+                            >
+                              {flow.dropOffRate > 50 ? (
+                                <TrendingDown className="h-3.5 w-3.5" />
+                              ) : (
+                                <TrendingUp className="h-3.5 w-3.5" />
+                              )}
+                              {flow.dropOffRate}%
+                            </span>
+                          </Link>
+                        </td>
+                        <td className="p-0">
+                          <Link
+                            href={`/dashboard/analytics/${flow.id}`}
+                            className="flex items-center justify-center px-2 py-3 transition-colors hover:bg-accent/50"
+                          >
+                            <ChevronRight className="h-4 w-4 text-muted-foreground/60" />
+                          </Link>
                         </td>
                       </tr>
                     ))}
