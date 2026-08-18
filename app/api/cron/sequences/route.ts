@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { processSequenceSteps } from "@/lib/sequence-processor";
+import { isAuthorizedCronRequest } from "@/lib/cron-auth";
 
 /**
  * Cron job handler that processes sequence enrollments.
@@ -7,10 +8,7 @@ import { processSequenceSteps } from "@/lib/sequence-processor";
  * GET /api/cron/sequences with Authorization: Bearer <CRON_SECRET>
  */
 export async function GET(request: NextRequest) {
-  const cronSecret = process.env.CRON_SECRET;
-  const providedSecret = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
-
-  if (!cronSecret || providedSecret !== cronSecret) {
+  if (!isAuthorizedCronRequest(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

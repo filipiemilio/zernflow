@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
+import { isAuthorizedCronRequest } from "@/lib/cron-auth";
 import { FlowLoadError, resumeSession } from "@/lib/flow-engine/engine";
 import type { Json } from "@/lib/types/database";
 import { isStandardMessagingWindowOpen } from "@/lib/automation-safety";
@@ -38,10 +39,7 @@ function wasSessionWrittenRecently(updatedAt: string): boolean {
 export async function GET(request: NextRequest) {
   // Header-only auth prevents secrets from leaking into URLs, reverse-proxy
   // access logs, browser history, or monitoring systems.
-  const cronSecret = process.env.CRON_SECRET;
-  const providedSecret = request.headers.get("authorization")?.replace(/^Bearer\s+/i, "");
-
-  if (!cronSecret || providedSecret !== cronSecret) {
+  if (!isAuthorizedCronRequest(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

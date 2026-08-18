@@ -13,6 +13,20 @@ import { backfillInboxConversations } from "@/lib/inbox-sync";
  * Tests a Zernio API key, saves it to the workspace, and auto-syncs channels.
  */
 export async function POST(request: NextRequest) {
+  // The middleware lets every /api/ route through unauthenticated, so this has
+  // to gate itself. Without it the endpoint answers anonymous requests and
+  // reports whether an arbitrary Zernio key is valid, along with the accounts
+  // it can reach — an oracle for testing stolen or guessed keys. Row-level
+  // security already blocks the workspace write below for non-members; this
+  // closes the read side of the same request.
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const body = await request.json();
   const { apiKey, workspaceId } = body;
 
@@ -37,8 +51,6 @@ export async function POST(request: NextRequest) {
 
   // If workspaceId provided, save the key and sync channels
   if (workspaceId) {
-    const supabase = await createClient();
-
     // Save the API key
     const { error: saveErr } = await supabase
       .from("workspaces")
