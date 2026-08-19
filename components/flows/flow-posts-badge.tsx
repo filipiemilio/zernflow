@@ -13,9 +13,6 @@ interface PostPreview {
   found: boolean;
 }
 
-/** Long enough that skimming the list never flashes cards open. */
-const HOVER_DELAY_MS = 1000;
-
 /**
  * Shared across cards for the page's lifetime, so hovering the same flow twice
  * — or two flows watching the same post — costs one request, not two.
@@ -44,37 +41,28 @@ function loadPreviews(postIds: string[]): Promise<PostPreview[]> {
 export function FlowPostsBadge({ summary }: { summary: FlowTriggerSummary }) {
   const [open, setOpen] = useState(false);
   const [previews, setPreviews] = useState<PostPreview[] | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const alive = useRef(true);
 
   useEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;
-      if (timer.current) clearTimeout(timer.current);
     };
   }, []);
 
   const postIds = summary.postIds;
 
-  const scheduleOpen = useCallback(() => {
-    if (timer.current) clearTimeout(timer.current);
-    // The fetch starts with the timer, not after it: the delay the card waits
-    // out is the same second the request needs, so the card opens filled.
-    if (previews === null && postIds.length > 0) {
-      loadPreviews(postIds).then((posts) => {
-        if (alive.current) setPreviews(posts);
-      });
-    }
-    timer.current = setTimeout(() => {
-      if (alive.current) setOpen(true);
-    }, HOVER_DELAY_MS);
+  /**
+   * Started from the whole badge row, which is a far wider target than the
+   * count itself. The pointer's travel from the row's edge to the text covers
+   * most of the request, so the card opens filled instead of loading.
+   */
+  const prefetch = useCallback(() => {
+    if (previews !== null || postIds.length === 0) return;
+    loadPreviews(postIds).then((posts) => {
+      if (alive.current) setPreviews(posts);
+    });
   }, [postIds, previews]);
-
-  const cancel = useCallback(() => {
-    if (timer.current) clearTimeout(timer.current);
-    setOpen(false);
-  }, []);
 
   if (!summary.isCommentFlow) return null;
 
@@ -82,7 +70,10 @@ export function FlowPostsBadge({ summary }: { summary: FlowTriggerSummary }) {
   const missing = previews?.filter((p) => !p.found).length ?? 0;
 
   return (
-    <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-[11px]">
+    <div
+      onMouseEnter={prefetch}
+      className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-[11px]"
+    >
       {summary.keywords.map((keyword) => (
         <span
           key={keyword}
@@ -99,7 +90,14 @@ export function FlowPostsBadge({ summary }: { summary: FlowTriggerSummary }) {
           todas as publicações
         </span>
       ) : count > 0 ? (
-        <span className="relative" onMouseEnter={scheduleOpen} onMouseLeave={cancel}>
+        <span
+          className="relative"
+          onMouseEnter={() => {
+            prefetch();
+            setOpen(true);
+          }}
+          onMouseLeave={() => setOpen(false)}
+        >
           <span
             className={cn(
               "font-mono underline decoration-dotted underline-offset-4 transition-colors",
