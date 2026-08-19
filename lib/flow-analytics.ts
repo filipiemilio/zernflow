@@ -21,6 +21,15 @@ export interface FlowFunnel {
    * a 0 would misreport "nobody followed" instead of "not tracked here".
    */
   followersConfirmed: number | null;
+  /**
+   * Completions across the flow's whole history, ignoring the selected period.
+   * Pairs with the post's lifetime view count, which the platform only exposes
+   * as a since-publication total: dividing a windowed numerator by an
+   * unwindowed denominator would produce a meaningless ratio.
+   */
+  lifetimeCompleted: number;
+  /** Instagram post ids the trigger watches; empty when it listens to all posts. */
+  monitoredPostIds: string[];
 }
 
 interface SessionRow {
@@ -89,6 +98,21 @@ function hasFollowerGateNode(nodes: unknown): boolean {
   });
 }
 
+/** Post ids a comment trigger watches; empty when scoped to every post. */
+export function monitoredPostIds(nodes: unknown): string[] {
+  if (!Array.isArray(nodes)) return [];
+  const ids = new Set<string>();
+  for (const node of nodes) {
+    const data = (node as { data?: Record<string, unknown> })?.data;
+    if (data?.triggerType !== "comment_keyword") continue;
+    if (data.postScope !== "specific") continue;
+    const postIds = data.postIds;
+    if (!Array.isArray(postIds)) continue;
+    for (const id of postIds) if (typeof id === "string" && id) ids.add(id);
+  }
+  return [...ids];
+}
+
 export async function getFlowFunnel(
   supabase: SupabaseClient<Database>,
   params: { workspaceId: string; flowId: string; since: string; until: string },
@@ -104,18 +128,19 @@ export async function getFlowFunnel(
 
   if (!flow) return null;
 
+  // Fetched unfiltered and split in memory: the period funnel and the lifetime
+  // completion count come from the same rows, so this avoids a second query
+  // just to total the history.
   const { data: sessions } = await supabase
     .from("flow_sessions")
-    .select("status, variables")
-    .eq("flow_id", flowId)
-    .gte("created_at", since)
-    .lte("created_at", until);
+    .select("status, variables, created_at")
+    .eq("flow_id", flowId);
 
-  const rows = (sessions ?? []) as SessionRow[];
-  const stages = computeFunnelStages(rows);
+  const all = (sessions ?? []) as Array<SessionRow & { created_at: string }>;
+  const inPeriod = all.filter((s) => s.created_at >= since && s.created_at <= until);
 
   const followersConfirmed = hasFollowerGateNode(flow.nodes)
-    ? rows.filter(
+    ? inPeriod.filter(
         (s) => s.status === "completed" && s.variables?.instagram_follower === "true",
       ).length
     : null;
@@ -125,7 +150,9 @@ export async function getFlowFunnel(
     flowName: flow.name,
     since,
     until,
-    stages,
+    stages: computeFunnelStages(inPeriod),
     followersConfirmed,
+    lifetimeCompleted: all.filter((s) => s.status === "completed").length,
+    monitoredPostIds: monitoredPostIds(flow.nodes),
   };
 }

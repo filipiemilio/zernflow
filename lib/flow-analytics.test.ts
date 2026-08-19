@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeFunnelStages } from "./flow-analytics";
+import { computeFunnelStages, monitoredPostIds } from "./flow-analytics";
 
 describe("computeFunnelStages", () => {
   it("counts each stage from the session variables the engine already writes", () => {
@@ -31,9 +31,9 @@ describe("computeFunnelStages", () => {
     // engine.ts runs `variables.message ??= incomingMessage.text` on every
     // session's first node, so a contact who never replied still has
     // variables.message — identical to comment_text, since nothing
-    // overwrote it. A naive "message is set" check would count this as
-    // engaged; it must not, or "replied" can outnumber "DM delivered",
-    // which is what production data caught before this fix.
+    // overwrote it. A naive "message is set" check counted this as engaged
+    // and, against production data, made "replied" outnumber "DM delivered",
+    // which is impossible.
     const stages = computeFunnelStages([
       { status: "cancelled", variables: { comment_text: "Texto", message: "Texto" } },
     ]);
@@ -48,8 +48,6 @@ describe("computeFunnelStages", () => {
   });
 
   it("falls back to presence when there is no comment_text to compare against", () => {
-    // Non-comment-triggered sessions have no comment_text at all; without it
-    // to compare against, presence of a real message is the best signal.
     const stages = computeFunnelStages([{ status: "active", variables: { message: "oi" } }]);
     expect(stages.find((s) => s.key === "engaged")?.count).toBe(1);
   });
@@ -68,7 +66,45 @@ describe("computeFunnelStages", () => {
   });
 
   it("stage order matches the funnel's left-to-right sequence", () => {
-    const stages = computeFunnelStages([]);
-    expect(stages.map((s) => s.key)).toEqual(["entered", "dmDelivered", "engaged", "completed"]);
+    expect(computeFunnelStages([]).map((s) => s.key)).toEqual([
+      "entered",
+      "dmDelivered",
+      "engaged",
+      "completed",
+    ]);
+  });
+});
+
+describe("monitoredPostIds", () => {
+  it("collects the post ids a comment trigger is scoped to", () => {
+    expect(
+      monitoredPostIds([
+        { data: { triggerType: "comment_keyword", postScope: "specific", postIds: ["a", "b"] } },
+        { data: { triggerType: "sendMessage" } },
+      ]),
+    ).toEqual(["a", "b"]);
+  });
+
+  it("returns nothing when the trigger listens to every post", () => {
+    // Without specific posts there is no single view count to report, so the
+    // card offers nothing rather than summing an unrelated total.
+    expect(
+      monitoredPostIds([{ data: { triggerType: "comment_keyword", postScope: "all" } }]),
+    ).toEqual([]);
+  });
+
+  it("ignores non-comment triggers and malformed data", () => {
+    expect(monitoredPostIds([{ data: { triggerType: "keyword", postIds: ["a"] } }])).toEqual([]);
+    expect(monitoredPostIds(null)).toEqual([]);
+    expect(monitoredPostIds([{}])).toEqual([]);
+  });
+
+  it("de-duplicates ids shared by more than one trigger", () => {
+    expect(
+      monitoredPostIds([
+        { data: { triggerType: "comment_keyword", postScope: "specific", postIds: ["a"] } },
+        { data: { triggerType: "comment_keyword", postScope: "specific", postIds: ["a", "b"] } },
+      ]),
+    ).toEqual(["a", "b"]);
   });
 });

@@ -2,10 +2,11 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Loader2, UserCheck } from "lucide-react";
+import { ArrowLeft, Eye, Loader2, UserCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { getFlowFunnel, type FlowFunnel } from "@/lib/flow-analytics";
+import type { PostMetricsSummary } from "@/lib/instagram-post-metrics";
 import { FunnelChart } from "@/components/analytics/funnel-chart";
 
 type TimeRange = "7d" | "30d" | "90d";
@@ -16,12 +17,16 @@ const TIME_RANGE_OPTIONS: { value: TimeRange; label: string; days: number }[] = 
   { value: "90d", label: "Últimos 90 dias", days: 90 },
 ];
 
+const nf = new Intl.NumberFormat("pt-BR");
+
 export function FlowFunnelView({
   workspaceId,
   initialFunnel,
+  postMetrics,
 }: {
   workspaceId: string;
   initialFunnel: FlowFunnel;
+  postMetrics: PostMetricsSummary | null;
 }) {
   const [timeRange, setTimeRange] = useState<TimeRange>("30d");
   const [funnel, setFunnel] = useState<FlowFunnel>(initialFunnel);
@@ -38,8 +43,7 @@ export function FlowFunnelView({
       const days = TIME_RANGE_OPTIONS.find((o) => o.value === range)!.days;
       const until = new Date();
       const since = new Date(until.getTime() - days * 24 * 60 * 60 * 1000);
-      const supabase = createClient();
-      const next = await getFlowFunnel(supabase, {
+      const next = await getFlowFunnel(createClient(), {
         workspaceId,
         flowId: initialFunnel.flowId,
         since: since.toISOString(),
@@ -53,11 +57,17 @@ export function FlowFunnelView({
 
   const enteredStage = funnel.stages[0];
   const completedStage = funnel.stages[funnel.stages.length - 1];
-  const overallDropOff = 100 - completedStage.pct;
+  const flowDropOff = 100 - completedStage.pct;
+
+  const views = postMetrics?.totals.views ?? 0;
+  // Both sides lifetime on purpose: views are only published as a
+  // since-publication total, so pairing them with the period's completions
+  // would divide a windowed number by an unwindowed one.
+  const viewToCompletion =
+    views > 0 ? (funnel.lifetimeCompleted / views) * 100 : null;
 
   return (
     <div className="flex h-full flex-col">
-      {/* Header */}
       <div className="border-b border-border px-8 py-6">
         <Link
           href="/dashboard/analytics"
@@ -92,7 +102,6 @@ export function FlowFunnelView({
         </div>
       </div>
 
-      {/* Content */}
       <div className="flex-1 overflow-auto p-8">
         {loading ? (
           <div className="flex items-center justify-center py-20">
@@ -106,25 +115,24 @@ export function FlowFunnelView({
           </div>
         ) : (
           <div className="space-y-6">
-            {/* Stat cards */}
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <StatCard label="Entrou no funil" value={enteredStage.count} />
+              <StatCard label="Entrou no funil" value={nf.format(enteredStage.count)} />
               <StatCard
                 label="Completou o fluxo"
-                value={completedStage.count}
+                value={nf.format(completedStage.count)}
                 sub={`${completedStage.pct}% de quem entrou`}
               />
               <StatCard
                 label="Queda geral"
-                value={`${overallDropOff}%`}
+                value={`${flowDropOff}%`}
                 sub="entre o comentário e a conclusão"
-                tone={overallDropOff > 60 ? "bad" : overallDropOff > 35 ? "warn" : "good"}
+                tone={flowDropOff > 60 ? "bad" : flowDropOff > 35 ? "warn" : "good"}
               />
               {funnel.followersConfirmed !== null ? (
                 <StatCard
                   label="Seguidores ao concluir"
-                  value={funnel.followersConfirmed}
-                  sub="confirmados como seguidores ao final — inclui quem já seguia antes"
+                  value={nf.format(funnel.followersConfirmed)}
+                  sub="confirmados ao final — inclui quem já seguia"
                   icon={UserCheck}
                 />
               ) : (
@@ -136,16 +144,56 @@ export function FlowFunnelView({
               )}
             </div>
 
-            {/* Funnel */}
-            <div className="rounded-xl border border-border bg-card p-8">
-              <h3 className="mb-6 text-sm font-semibold">Funil da campanha</h3>
-              <FunnelChart stages={funnel.stages} />
+            {/* The views card fills the space the centred funnel leaves free.
+                Side by side only from xl: below that the funnel column gets
+                narrower than the chart's own minimum and starts scrolling. */}
+            <div className="grid gap-6 xl:grid-cols-[minmax(0,260px)_minmax(0,1fr)]">
+              {postMetrics ? (
+                <div className="flex flex-col rounded-xl border border-border bg-card p-6">
+                  <div className="flex items-center gap-2">
+                    <Eye className="h-4 w-4 text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground">Visualizações</p>
+                  </div>
+                  <p className="mt-1 text-3xl font-bold">{nf.format(views)}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {postMetrics.posts.length === 1
+                      ? "da publicação monitorada"
+                      : `somadas de ${postMetrics.posts.length} publicações`}
+                  </p>
+
+                  <div className="mt-4 border-t border-border pt-4">
+                    <p className="text-xl font-semibold">
+                      {viewToCompletion === null ? "—" : `${viewToCompletion.toFixed(1)}%`}
+                    </p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      de quem viu chegou ao fim do fluxo
+                    </p>
+                  </div>
+
+                  <p className="mt-auto pt-4 text-[11px] leading-relaxed text-muted-foreground/70">
+                    Números totais desde a publicação — não seguem o período
+                    selecionado acima.
+                  </p>
+                </div>
+              ) : (
+                <div className="flex flex-col justify-center rounded-xl border border-dashed border-border p-6">
+                  <p className="text-sm text-muted-foreground">Sem visualizações</p>
+                  <p className="mt-1 text-xs text-muted-foreground/70">
+                    O gatilho deste fluxo não está limitado a publicações específicas,
+                    então não há um post único para medir.
+                  </p>
+                </div>
+              )}
+
+              <div className="rounded-xl border border-border bg-card p-8">
+                <h3 className="mb-6 text-sm font-semibold">Funil da campanha</h3>
+                <FunnelChart stages={funnel.stages} />
+              </div>
             </div>
 
             <p className="text-xs text-muted-foreground">
-              &ldquo;Respondeu no Direct&rdquo; conta quem mandou qualquer mensagem de volta —
-              hoje não é possível distinguir quem abriu a DM sem responder de quem nunca
-              a viu, porque o Instagram não expõe essa leitura separadamente.
+              &ldquo;Respondeu no Direct&rdquo; conta quem mandou qualquer mensagem de volta — o
+              Instagram não expõe quem apenas abriu a DM sem responder.
             </p>
           </div>
         )}
@@ -162,7 +210,7 @@ function StatCard({
   icon: Icon,
 }: {
   label: string;
-  value: string | number;
+  value: string;
   sub?: string;
   tone?: "good" | "warn" | "bad";
   icon?: typeof UserCheck;
