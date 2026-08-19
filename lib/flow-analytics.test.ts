@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   completionsByPost,
   computeFunnelStages,
+  flowTriggerSummary,
   monitoredPostIds,
 } from "./flow-analytics";
 
@@ -142,5 +143,68 @@ describe("monitoredPostIds", () => {
         { data: { triggerType: "comment_keyword", postScope: "specific", postIds: ["a", "b"] } },
       ]),
     ).toEqual(["a", "b"]);
+  });
+});
+
+describe("flowTriggerSummary", () => {
+  it("describes a comment flow's keywords and watched posts", () => {
+    expect(
+      flowTriggerSummary([
+        {
+          data: {
+            triggerType: "comment_keyword",
+            postScope: "specific",
+            postIds: ["a", "b"],
+            keywords: [{ value: "dm" }],
+          },
+        },
+        { data: { triggerType: "sendMessage" } },
+      ]),
+    ).toEqual({
+      keywords: ["dm"],
+      postIds: ["a", "b"],
+      watchesAllPosts: false,
+      isCommentFlow: true,
+    });
+  });
+
+  it("reads keywords stored as plain strings by older templates", () => {
+    // Templates once seeded config.keywords as a string array; the matcher
+    // still accepts both shapes, so the list must read both too.
+    const summary = flowTriggerSummary([
+      {
+        data: {
+          triggerType: "comment_keyword",
+          postScope: "specific",
+          postIds: ["a"],
+          keywords: ["texto", { value: "Texto" }],
+        },
+      },
+    ]);
+    expect(summary.keywords).toEqual(["texto", "Texto"]);
+  });
+
+  it("flags a trigger scoped to every post instead of listing ids", () => {
+    const summary = flowTriggerSummary([
+      { data: { triggerType: "comment_keyword", postScope: "all", keywords: [{ value: "x" }] } },
+    ]);
+    expect(summary.watchesAllPosts).toBe(true);
+    expect(summary.postIds).toEqual([]);
+  });
+
+  it("reports a non-comment flow so the list renders nothing for it", () => {
+    // DM-only flows have no post to name; the badge hides rather than
+    // showing an empty or misleading row.
+    expect(flowTriggerSummary([{ data: { triggerType: "keyword" } }]).isCommentFlow).toBe(false);
+    expect(flowTriggerSummary(null).isCommentFlow).toBe(false);
+  });
+
+  it("de-duplicates a keyword repeated across trigger nodes", () => {
+    const summary = flowTriggerSummary([
+      { data: { triggerType: "comment_keyword", postScope: "specific", postIds: ["a"], keywords: [{ value: "dm" }] } },
+      { data: { triggerType: "comment_keyword", postScope: "specific", postIds: ["b"], keywords: [{ value: "dm" }] } },
+    ]);
+    expect(summary.keywords).toEqual(["dm"]);
+    expect(summary.postIds).toEqual(["a", "b"]);
   });
 });

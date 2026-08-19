@@ -119,6 +119,62 @@ export function completionsByPost(
   return byPost;
 }
 
+export interface FlowTriggerSummary {
+  /** Keywords that fire the flow, in the order they were added. */
+  keywords: string[];
+  /** Specific posts being watched; empty when the trigger listens to all. */
+  postIds: string[];
+  /** True when the trigger fires on any post rather than a chosen few. */
+  watchesAllPosts: boolean;
+  /** False when the flow has no comment trigger at all (DM-only flows). */
+  isCommentFlow: boolean;
+}
+
+/**
+ * Everything the flow list needs to describe a flow's trigger, read straight
+ * from the stored nodes — no API call, so it costs nothing to render.
+ */
+export function flowTriggerSummary(nodes: unknown): FlowTriggerSummary {
+  const empty: FlowTriggerSummary = {
+    keywords: [],
+    postIds: [],
+    watchesAllPosts: false,
+    isCommentFlow: false,
+  };
+  if (!Array.isArray(nodes)) return empty;
+
+  const keywords: string[] = [];
+  let isCommentFlow = false;
+  let watchesAllPosts = false;
+
+  for (const node of nodes) {
+    const data = (node as { data?: Record<string, unknown> })?.data;
+    if (data?.triggerType !== "comment_keyword") continue;
+    isCommentFlow = true;
+    if (data.postScope !== "specific") watchesAllPosts = true;
+
+    const raw = data.keywords;
+    if (!Array.isArray(raw)) continue;
+    for (const entry of raw) {
+      // Keywords are stored as { value, matchType }, but templates seeded
+      // older flows with plain strings; both shapes still exist in the data.
+      const value = typeof entry === "string" ? entry : (entry as { value?: unknown })?.value;
+      if (typeof value === "string" && value && !keywords.includes(value)) {
+        keywords.push(value);
+      }
+    }
+  }
+
+  if (!isCommentFlow) return empty;
+
+  return {
+    keywords,
+    postIds: monitoredPostIds(nodes),
+    watchesAllPosts,
+    isCommentFlow: true,
+  };
+}
+
 /** Post ids a comment trigger watches; empty when scoped to every post. */
 export function monitoredPostIds(nodes: unknown): string[] {
   if (!Array.isArray(nodes)) return [];

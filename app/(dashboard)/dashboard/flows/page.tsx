@@ -3,6 +3,8 @@ import Link from "next/link";
 import { GitBranch, Sparkles, Plug } from "lucide-react";
 import { CreateFlowButton } from "@/components/create-flow-button";
 import { ImportFlowButton, ExportFlowButton, DeleteFlowButton } from "@/components/flow-actions";
+import { FlowPostsBadge } from "@/components/flows/flow-posts-badge";
+import { flowTriggerSummary } from "@/lib/flow-analytics";
 import type { FlowStatus } from "@/lib/types/database";
 
 const statusConfig: Record<FlowStatus, { label: string; classes: string }> = {
@@ -36,6 +38,8 @@ function formatDate(dateString: string) {
 export default async function FlowsPage() {
   const { workspace, supabase } = await getWorkspace();
 
+  // Keywords and post counts come straight from the stored nodes, so this page
+  // still makes no external call; thumbnails load on hover instead.
   const [{ data: flows }, { count: channelCount }] = await Promise.all([
     supabase
       .from("flows")
@@ -110,6 +114,7 @@ export default async function FlowsPage() {
           {flows.map((flow) => {
             const status = statusConfig[flow.status as FlowStatus] ?? statusConfig.draft;
             const nodeCount = Array.isArray(flow.nodes) ? flow.nodes.length : 0;
+            const summary = flowTriggerSummary(flow.nodes);
 
             return (
               <Link
@@ -143,6 +148,9 @@ export default async function FlowsPage() {
                     <DeleteFlowButton flow={flow} />
                   </div>
                 </div>
+
+                <FlowPostsBadge summary={summary} />
+
                 <p className="mt-4 text-xs text-muted-foreground">
                   Updated {formatDate(flow.updated_at)}
                 </p>
