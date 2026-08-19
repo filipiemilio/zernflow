@@ -2,11 +2,11 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Eye, Loader2, UserCheck } from "lucide-react";
+import { ArrowLeft, ExternalLink, Eye, Loader2, UserCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import { getFlowFunnel, type FlowFunnel } from "@/lib/flow-analytics";
-import type { PostMetricsSummary } from "@/lib/instagram-post-metrics";
+import type { PostMetrics, PostMetricsSummary } from "@/lib/instagram-post-metrics";
 import { FunnelChart } from "@/components/analytics/funnel-chart";
 
 type TimeRange = "7d" | "30d" | "90d";
@@ -59,12 +59,35 @@ export function FlowFunnelView({
   const completedStage = funnel.stages[funnel.stages.length - 1];
   const flowDropOff = 100 - completedStage.pct;
 
-  const views = postMetrics?.totals.views ?? 0;
+  // "all" totals every monitored post; a specific id isolates one, which is
+  // how a weak call to action shows up — a post can carry most of the views
+  // and almost none of the completions.
+  const [selectedPost, setSelectedPost] = useState<string>("all");
+
+  const activePost =
+    selectedPost === "all"
+      ? null
+      : (postMetrics?.posts.find((p) => p.postId === selectedPost) ?? null);
+
+  const views = activePost ? activePost.views : (postMetrics?.totals.views ?? 0);
   // Both sides lifetime on purpose: views are only published as a
   // since-publication total, so pairing them with the period's completions
   // would divide a windowed number by an unwindowed one.
-  const viewToCompletion =
-    views > 0 ? (funnel.lifetimeCompleted / views) * 100 : null;
+  const completions = activePost
+    ? (funnel.lifetimeCompletedByPost[activePost.postId] ?? 0)
+    : funnel.lifetimeCompleted;
+  const viewToCompletion = views > 0 ? (completions / views) * 100 : null;
+
+  const postLabel = (post: PostMetrics) => {
+    const date = post.publishedAt
+      ? new Date(post.publishedAt).toLocaleDateString("pt-BR", {
+          day: "2-digit",
+          month: "2-digit",
+        })
+      : null;
+    const shortcode = post.url?.match(/\/(?:reel|p)\/([^/]+)/)?.[1];
+    return `${date ?? shortcode ?? post.postId.slice(-6)} · ${nf.format(post.views)} views`;
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -154,11 +177,45 @@ export function FlowFunnelView({
                     <Eye className="h-4 w-4 text-muted-foreground" />
                     <p className="text-sm text-muted-foreground">Visualizações</p>
                   </div>
-                  <p className="mt-1 text-3xl font-bold">{nf.format(views)}</p>
+
+                  {postMetrics.posts.length > 1 && (
+                    <select
+                      value={selectedPost}
+                      onChange={(e) => setSelectedPost(e.target.value)}
+                      className="mt-2 w-full rounded-lg border border-border bg-background px-2 py-1.5 text-xs text-foreground focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary"
+                    >
+                      <option value="all">
+                        Todas · {nf.format(postMetrics.totals.views)} views
+                      </option>
+                      {postMetrics.posts.map((post) => (
+                        <option key={post.postId} value={post.postId}>
+                          {postLabel(post)}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+
+                  <p className="mt-3 text-3xl font-bold">{nf.format(views)}</p>
                   <p className="mt-0.5 text-xs text-muted-foreground">
-                    {postMetrics.posts.length === 1
-                      ? "da publicação monitorada"
-                      : `somadas de ${postMetrics.posts.length} publicações`}
+                    {activePost ? (
+                      activePost.url ? (
+                        <a
+                          href={activePost.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 hover:underline"
+                        >
+                          ver publicação
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      ) : (
+                        "desta publicação"
+                      )
+                    ) : postMetrics.posts.length === 1 ? (
+                      "da publicação monitorada"
+                    ) : (
+                      `somadas de ${postMetrics.posts.length} publicações`
+                    )}
                   </p>
 
                   <div className="mt-4 border-t border-border pt-4">
@@ -168,7 +225,18 @@ export function FlowFunnelView({
                     <p className="mt-0.5 text-xs text-muted-foreground">
                       de quem viu chegou ao fim do fluxo
                     </p>
+                    <p className="mt-1 text-[11px] text-muted-foreground/70">
+                      {nf.format(completions)}{" "}
+                      {completions === 1 ? "conclusão" : "conclusões"}
+                      {activePost && completions === 0 && " — nunca gerou sessão"}
+                    </p>
                   </div>
+
+                  {activePost && !activePost.synced && (
+                    <p className="mt-3 text-[11px] text-amber-600">
+                      Métricas desta publicação ainda não sincronizaram.
+                    </p>
+                  )}
 
                   <p className="mt-auto pt-4 text-[11px] leading-relaxed text-muted-foreground/70">
                     Números totais desde a publicação — não seguem o período

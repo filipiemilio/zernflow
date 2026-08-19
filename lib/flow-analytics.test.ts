@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { computeFunnelStages, monitoredPostIds } from "./flow-analytics";
+import {
+  completionsByPost,
+  computeFunnelStages,
+  monitoredPostIds,
+} from "./flow-analytics";
 
 describe("computeFunnelStages", () => {
   it("counts each stage from the session variables the engine already writes", () => {
@@ -72,6 +76,38 @@ describe("computeFunnelStages", () => {
       "engaged",
       "completed",
     ]);
+  });
+});
+
+describe("completionsByPost", () => {
+  it("attributes completions to the post whose comment started the session", () => {
+    expect(
+      completionsByPost([
+        { status: "completed", variables: { post_id: "a" } },
+        { status: "completed", variables: { post_id: "a" } },
+        { status: "completed", variables: { post_id: "b" } },
+        { status: "active", variables: { post_id: "a" } },
+      ]),
+    ).toEqual({ a: 2, b: 1 });
+  });
+
+  it("omits a post with no completions rather than recording a zero", () => {
+    // A monitored post that never converted simply has no key; the view layer
+    // reads a missing key as zero, which is what makes a post carrying views
+    // but no completions visible instead of hidden in a total.
+    const byPost = completionsByPost([{ status: "cancelled", variables: { post_id: "a" } }]);
+    expect(byPost).toEqual({});
+    expect(byPost["a"] ?? 0).toBe(0);
+  });
+
+  it("skips sessions with no post attribution", () => {
+    expect(
+      completionsByPost([
+        { status: "completed", variables: null },
+        { status: "completed", variables: {} },
+        { status: "completed", variables: { post_id: "" } },
+      ]),
+    ).toEqual({});
   });
 });
 

@@ -6,6 +6,7 @@ export interface PostMetrics {
   postId: string;
   url: string | null;
   thumbnailUrl: string | null;
+  publishedAt: string | null;
   views: number;
   reach: number;
   /** Every comment on the post, not only the ones matching the trigger keyword. */
@@ -58,6 +59,7 @@ export async function fetchPostMetrics(
         postId,
         url: null,
         thumbnailUrl: null,
+        publishedAt: null,
         views: 0,
         reach: 0,
         comments: 0,
@@ -73,6 +75,7 @@ export async function fetchPostMetrics(
               analytics?: Record<string, unknown>;
               platformPostUrl?: string | null;
               thumbnailUrl?: string | null;
+              publishedAt?: string | null;
               syncStatus?: string;
             }
           | undefined;
@@ -84,6 +87,7 @@ export async function fetchPostMetrics(
           postId,
           url: post?.platformPostUrl ?? null,
           thumbnailUrl: post?.thumbnailUrl ?? null,
+          publishedAt: post?.publishedAt ?? null,
           views: num(analytics.views),
           reach: num(analytics.reach),
           comments: num(analytics.comments),

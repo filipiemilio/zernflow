@@ -28,6 +28,13 @@ export interface FlowFunnel {
    * unwindowed denominator would produce a meaningless ratio.
    */
   lifetimeCompleted: number;
+  /**
+   * Lifetime completions keyed by the post whose comment started the session,
+   * so a single post's view count can be paired with the completions it
+   * actually produced. Every session carries variables.post_id, so this
+   * attribution is exact rather than inferred.
+   */
+  lifetimeCompletedByPost: Record<string, number>;
   /** Instagram post ids the trigger watches; empty when it listens to all posts. */
   monitoredPostIds: string[];
 }
@@ -98,6 +105,20 @@ function hasFollowerGateNode(nodes: unknown): boolean {
   });
 }
 
+/** Completed sessions grouped by the post whose comment started them. */
+export function completionsByPost(
+  sessions: Array<{ status: string; variables: Record<string, unknown> | null }>,
+): Record<string, number> {
+  const byPost: Record<string, number> = {};
+  for (const session of sessions) {
+    if (session.status !== "completed") continue;
+    const postId = session.variables?.post_id;
+    if (typeof postId !== "string" || !postId) continue;
+    byPost[postId] = (byPost[postId] ?? 0) + 1;
+  }
+  return byPost;
+}
+
 /** Post ids a comment trigger watches; empty when scoped to every post. */
 export function monitoredPostIds(nodes: unknown): string[] {
   if (!Array.isArray(nodes)) return [];
@@ -153,6 +174,7 @@ export async function getFlowFunnel(
     stages: computeFunnelStages(inPeriod),
     followersConfirmed,
     lifetimeCompleted: all.filter((s) => s.status === "completed").length,
+    lifetimeCompletedByPost: completionsByPost(all),
     monitoredPostIds: monitoredPostIds(flow.nodes),
   };
 }
